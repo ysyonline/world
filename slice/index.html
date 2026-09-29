@@ -52,6 +52,10 @@
  *   模块9：城墙分 4 段（甲乙丙丁，占位）+ 布防——点墙段开布防面板，+/- 驻兵（个体带 seg 字段，
  *          上墙取熟练度最高者、撤防回池撤该段最低者）；檑木按段放置（耗木5/上限2，返还一半）；
  *          段战力 = Σ(0.6+0.4×prof/100) 实时可见（模块11 结算锚点）；空段 ∅ 红字提示。
+ *   模块10：敌波次日程（3 骚扰 15/26/33 日 + 总攻 40 日，CONFIG.waves 占位）——波次日日结后敌兵
+ *          集结关外（个体带目标段，默认最弱段优先=战力+檑木加权最低，策略 CONFIG 可切）；
+ *          关外显示敌兵标记（总攻红字）；HUD 倒计时转正式「距下一波：N 日」≤3 日红字 + 探马预警；
+ *          每波只触发一次；战斗结算留模块11（切片纪律：无战中操作）。
  *
  * 架构约定（供后续 16 个模块挂靠）：
  *   - CONFIG：全部数值占位集中于此，改参只动这里（切片验收标准 §7.4）；
@@ -90,6 +94,17 @@ const CONFIG = {
   desertPerDay: 0.05,     // 每多欠 1 日 +5%（低熟练度兵优先跑——新兵无归属感）
   // 城墙分段与布防（模块9；全部占位，待原型验证）
   wall: { segNames: ['甲', '乙', '丙', '丁'], logCost: 5, logMaxPerSeg: 2 }, // 檑木：每座耗木5、每段上限2（待原型验证）
+  logDefWeight: 0.5,    // 最弱段判定：每座檑木折算防御战力 0.5（占位，待原型验证）
+  waveTargetStrategy: 'weakest', // 敌波目标段：'weakest'=挑战力+檑木最低段（匈奴挑软柿子）/ 'random'
+  // 敌波次日程（模块10，02 §3 三层节奏；全部占位，待原型验证，模块17统一调）
+  waves: [
+    { day: 15, size: 4,  siege: false, label: '小股骚扰' },
+    { day: 26, size: 5,  siege: false, label: '小股骚扰' },
+    { day: 33, size: 6,  siege: false, label: '大股袭扰' },
+    { day: 40, size: 12, siege: true,  label: '总攻' },
+  ],
+  enemyHp: 3,           // 敌兵生命（占位，模块11 结算用，待原型验证）
+  raidWarnDays: 3,      // 波次前 N 日探马预警
   buildings: {
     farm:   { label: '农田',   cost: { money: 20, wood: 10 }, capacity: 5, output: { grain: 12 } },
     lumber: { label: '伐木场', cost: { money: 30, wood: 20 }, capacity: 4, output: { wood: 8 } },
@@ -126,6 +141,9 @@ const state = {
   // seg 上墙/回池由布防函数维护个体 seg 字段；模块11 结算按 seg 点名。
   selectedSeg: null,      // 当前选中墙段下标（模块9 面板）
   segLogs: [0, 0, 0, 0],  // 每墙段檑木数（模块9，长度跟随 CONFIG.wall.segNames）
+  // 敌情（模块10）：enemies[] 个体 {seg: 目标墙段, siege: 总攻与否}；战斗结算留模块11（切片纪律：无战中操作）
+  enemies: [],            // 当前在关外集结的敌兵
+  waveFired: {},          // 波次去重：波次下标 → true（每波只触发一次）
 };
 
 function pushLog(text) {
@@ -240,7 +258,6 @@ function settleDay(day) {
 // 日切钩子：模块10 波次判定等也在这里接入
 function onNewDay(day) {
   settleDay(day);
-  if (day === CONFIG.siegeDay) pushLog('【预警】探马回报：总攻就在今日！（占位）');
 }
 
 // ============================ 岗位与产出（模块4） ============================
@@ -482,6 +499,47 @@ function removeLog(s) {
   return true;
 }
 
+// ============================ 敌波次系统（模块10，02 §3 三层节奏） ============================
+// 波次日日结后敌兵集结关外（个体带目标段）；只触发+呈现，战斗结算留模块11（切片纪律）。
+// 目标段策略：'weakest' = 段战力+檑木加权最低（匈奴挑软柿子，拷问布防取舍）
+function segDefScore(s) { return segPower(s) + state.segLogs[s] * CONFIG.logDefWeight; }
+function pickTargetSeg() {
+  const n = CONFIG.wall.segNames.length;
+  if (CONFIG.waveTargetStrategy === 'random') {
+    return Math.floor(Math.random() * n);
+  }
+  let weakest = 0;
+  for (let s = 1; s < n; s++) if (segDefScore(s) < segDefScore(weakest)) weakest = s;
+  return weakest;
+}
+// 下一波（含已触发中的）：供倒计时与预警；无未触发波返回 null
+function nextWave() {
+  for (let i = 0; i < CONFIG.waves.length; i++) {
+    if (!state.waveFired[i]) return { idx: i, wave: CONFIG.waves[i] };
+  }
+  return null;
+}
+// 波次触发（日结管线末位：当日军务全结后再来敌，顺序语义=「夜半敌至」）
+dailySettlers.push(function waves(day) {
+  for (let i = 0; i < CONFIG.waves.length; i++) {
+    const w = CONFIG.waves[i];
+    if (state.waveFired[i] || day < w.day) continue;
+    state.waveFired[i] = true;
+    const seg = pickTargetSeg();
+    for (let j = 0; j < w.size; j++) state.enemies.push({ seg: seg, siege: w.siege });
+    const segName = CONFIG.wall.segNames[seg];
+    pushLog((w.siege ? '【总攻】' : '【' + w.label + '】') + '匈奴 ' + w.size + ' 人犯边，直扑【' + segName + '】段！'
+      + (w.siege ? '' : '（战报待守军接战——模块11）'));
+  }
+});
+// 探马预警（日结，非波次日也给：提前 CONFIG.raidWarnDays 天开始喊）
+dailySettlers.push(function raidWarning() {
+  const nw = nextWave();
+  if (nw && nw.wave.day - state.day <= CONFIG.raidWarnDays && nw.wave.day > state.day) {
+    pushLog('【探马】' + nw.wave.day + ' 日将有 ' + (nw.wave.siege ? '总攻' : nw.wave.label) + '（约 ' + nw.wave.size + ' 人），速布防！');
+  }
+});
+
 function advanceClock(dtRealSec) {
   if (state.paused) return;
   const speed = CONFIG.speeds[state.speedIdx];
@@ -609,11 +667,18 @@ function renderHUD() {
   ctx.strokeStyle = '#6b5b38';
   ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
 
-  // 总攻倒计时（占位，模块10 接入波次日程）
-  const left = CONFIG.siegeDay - state.day;
+  // 倒计时（模块10 转正式）：距下一波天数；≤3 日红字
+  const nw = nextWave();
   ctx.font = '16px sans-serif';
-  ctx.fillStyle = left <= 5 ? '#d95745' : '#c9bd9e';
-  ctx.fillText(left > 0 ? '距总攻：' + left + ' 日（占位）' : '【总攻进行中】（占位）', 340, 28);
+  if (nw) {
+    const left = nw.wave.day - state.day;
+    const tag = nw.wave.siege ? '总攻' : nw.wave.label;
+    ctx.fillStyle = left <= CONFIG.raidWarnDays ? '#d95745' : '#c9bd9e';
+    ctx.fillText('距' + tag + '：' + left + ' 日', 340, 28);
+  } else {
+    ctx.fillStyle = '#d95745';
+    ctx.fillText('【战事已尽】（占位）', 340, 28);
+  }
 
   // 资源面板（模块2 八项状态实时读出；模块16 再打磨视觉与预警灯）
   ctx.fillStyle = '#c9bd9e';
@@ -663,6 +728,27 @@ function renderScene() {
   ctx.font = '15px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('关 外（敌来向）', W / 2, top + 36);
+
+  // 敌兵集结（模块10）：按目标段聚堆画在关外区域；总攻大标记红字，骚扰小标记
+  if (state.enemies.length) {
+    const bySeg = {};
+    state.enemies.forEach(function (e) { bySeg[e.seg] = (bySeg[e.seg] || 0) + 1; });
+    const segs2 = CONFIG.wall.segNames;
+    const hasSiege = state.enemies.some(function (e) { return e.siege; });
+    Object.keys(bySeg).forEach(function (k) {
+      const s = +k, cnt = bySeg[k];
+      const cx = (s + 0.5) * (W / segs2.length);
+      const cy = wallY - 44;
+      ctx.font = 'bold 14px sans-serif';
+      ctx.fillStyle = hasSiege ? '#d95745' : '#c98a4a';
+      ctx.fillText('🏹匈奴×' + cnt, cx, cy);
+    });
+    if (hasSiege) {
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillStyle = '#d95745';
+      ctx.fillText('—— 总攻进行中 ——', W / 2, wallY - 66);
+    }
+  }
 
   // 城墙分段（模块9）：等分 N 段，显示段名/驻兵/檑木/战力；点选命中见 wallSegAt()
   const segs = CONFIG.wall.segNames;

@@ -233,7 +233,43 @@ console.assert(segBtns.length >= 3, 'M9 布防面板按钮注册，got ' + segBt
 console.assert(segBtns.every(b => b.y >= 258 && b.y + b.h <= 600), 'M9 布防面板不溢出、不压建筑面板');
 state.selectedSeg = null;
 render();
-console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防)');
+
+// ---- 模块10：敌波次系统 ----
+// 最弱段策略：清空防御、给乙段上 1 兵 → 乙段战力最高，最弱段必须不是乙
+state.troops.forEach(function (t) { t.seg = null; });
+state.segLogs = [0, 0, 0, 0];
+setRes('soldiers', 1); state.troops[0].prof = 80; state.troops[0].seg = 1; // 乙段 0.92
+const wk = pickTargetSeg();
+console.assert(wk !== 1 && segDefScore(wk) <= segDefScore(0) && segDefScore(wk) <= segDefScore(2) && segDefScore(wk) <= segDefScore(3), 'M10 最弱段避开有防段，got ' + wk);
+// 檑木加权：只给丙段放檑木 → 最弱段不选丙（丙被檑木抬离最低）
+state.segLogs[2] = 2;
+const wk2 = pickTargetSeg();
+console.assert(wk2 !== 2, 'M10 檑木抬升防御评分，最弱段不选丙，got ' + wk2);
+state.segLogs[2] = 0;
+// 波次触发（自备日程：前面模块测试已把时钟推过默认波次日）：
+const base = state.day;
+CONFIG.waves = [
+  { day: base + 1, size: 4,  siege: false, label: '小股骚扰' },
+  { day: base + 5, size: 5,  siege: false, label: '大股袭扰' },
+  { day: base + 9, size: 12, siege: true,  label: '总攻' },
+];
+state.waveFired = {}; state.enemies = [];
+setRes('grain', 5000); setRes('money', 5000); setRes('soldiers', 0); state.unpaidDays = 0;
+advanceClock(31); // base+1 日：第 1 波触发
+console.assert(state.enemies.length === 4, 'M10 第1波 4 敌集结，got ' + state.enemies.length);
+console.assert(state.enemies.every(e => e.seg === state.enemies[0].seg && !e.siege), 'M10 骚扰波同段、非总攻');
+console.assert(state.log.some(x => x.indexOf('【小股骚扰】') >= 0), 'M10 骚扰日志');
+advanceClock(31); // base+2 日：不重复触发
+console.assert(state.enemies.length === 4, 'M10 每波只触发一次');
+console.assert(nextWave().wave.day === base + 5, 'M10 下一波日程正确');
+advanceClock(31 * 4); // base+5：第 2 波
+console.assert(state.enemies.length === 9, 'M10 第2波后累计 9 敌，got ' + state.enemies.length);
+advanceClock(31 * 4); // base+9：总攻
+console.assert(state.enemies.length === 21 && state.enemies.filter(e => e.siege).length === 12, 'M10 总攻 12 敌入列');
+console.assert(state.log.some(x => x.indexOf('【总攻】') >= 0), 'M10 总攻日志');
+console.assert(nextWave() === null, 'M10 全部波次已触发');
+render();
+console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防 + 模块10 波次)');
 `;
 
 eval(code + test);
