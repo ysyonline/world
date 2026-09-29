@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>长城关隘 · 垂直切片 v0.1</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #14100c;
+    height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  #game {
+    max-width: 100vw; max-height: 100vh;
+    aspect-ratio: 16 / 9;
+    background: #1d1812;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+<script>
+'use strict';
+/* ============================================================================
+ * 长城关隘 · 垂直切片 v0.1 —— 模块1 项目骨架 + 模块2 资源数据层
+ * 单文件 HTML + Canvas + 原生 JS（技术方案见 game-design/04-垂直切片-v0.1.md §2）
+ *
+ * 验收口径：
+ *   模块1：浏览器打开即跑；日计数按节奏推进（1 游戏日 = 30 真实秒）；可暂停/继续。
+ *   模块2：粮/木/矿/武器/钱/人口/兵/声望 八项状态可读写（getRes/setRes/addRes）；
+ *          日切结算触发（onNewDay → settleDay 管线，日结摘要入日志）。
+ *          调试验证：数字键 1~8 对应八项 +10，Shift+数字 -10（正式前移除）。
+ *   模块3：点地块可建 农田/伐木场/矿洞/铁匠铺，扣钱扣木；矿洞只能建在矿点，
+ *          矿点只能建矿洞；右键拆除返还一半。
+ *   模块4：点建筑 +/- 在岗人口，效率按 01 §3.2 曲线（x≤N 线性、x>N 按 k 急降）；
+ *          产出（农田→粮 伐木场→木 矿洞→矿）接入日结管线；超员界面红字警示。
+ *   模块5：每日耗粮（民 1/日、兵倍数待调）接入日结；粮存低于动态阈值（全员日耗粮×缓冲天数）
+ *          触发饥荒态→每日减声望；粮尽断粮→每日饿死减人口；HUD 显示耗粮速率/饥荒线/饥荒态。
+ *   模块6：铁匠铺产出接入（耗木+矿→武器，原料不足按比例限产）；面板显示原料消耗与限产警示。
+ *   模块7：军营建筑 + 送训（训练周期 T，受训者占闲民仍耗粮）→ 期满成兵（满练）；
+ *          提前征召 → 仓促兵（熟练度低）+ 士气打击；士气每日自然恢复；兵吃粮 ×2 生效。
+ *   反馈修复（2026-09-29）：① 左上「当日收支」看板（粮/木/矿/武器 收支净额 + 危机分析）；
+ *          ② 建造面板压缩步距（5 建筑不再溢出进日志区）；③ 军营面板 退训/送训/征召 三按钮并存。
+ *   模块8：军饷（每兵每日耗钱）接日结（顺序：产出→耗粮→军饷→训练）；欠饷 → 逃兵率随欠饷天数升级
+ *          （10% 起，每多欠 1 日 +5%，确定性 ceil，低熟练度兵先跑）；看板钱行与军营面板显示军饷状态。
+ *   重构（2026-09-29 用户裁决）：士气维度退役（结构性缺陷：单值士气下新兵白捡老兵状态）。
+ *          熟练度个体化连续值：平民 0%、受训 +16%/日、满训出营 80% 不满值、杀敌补满 100%（模块11 接）；
+ *          战力 = 0.6 + 0.4×熟练度；提前征召惩罚=熟练度天然变低；欠饷逃兵挂天数梯度。
+ *
+ * 架构约定（供后续 16 个模块挂靠）：
+ *   - CONFIG：全部数值占位集中于此，改参只动这里（切片验收标准 §7.4）；
+ *   - state：全局游戏状态，模块2 起往里挂资源/人口等八项数据；
+ *   - onNewDay(day)：日切钩子，模块2 的每日结算从这里接入；
+ *   - render*()：分区绘制，HUD / 场景 / 日志各自独立。
+ * ==========================================================================*/
+
+// ============================ 配置区（一处调参，全局生效） ============================
+const CONFIG = {
+  dayLengthSec: 30,     // 1 游戏日 = 30 真实秒（待原型验证，模块17调；依据：40日×30s=20min 纯流转，落在单局 20~30min 目标下沿）
+  startDay: 1,          // 开局日
+  siegeDay: 40,         // 总攻日（占位，模块10 波次系统细化）
+  // 开局资源（八项状态，全部为占位，待原型验证，模块17统一调）
+  start: { grain: 100, wood: 60, ore: 0, weapons: 0, money: 120, pop: 20, soldiers: 0, prestige: 50 },
+  // 网格地图（模块3）：关内经营区 rows×cols；oreSpots 为固定矿点 [行,列]
+  grid: { rows: 4, cols: 10, cell: 64, oreSpots: [[0, 8], [2, 1]] },
+  // 建筑造价与岗位（耗钱耗木；capacity=岗位上限N、output=满岗日产；占位，待原型验证，模块17统一调）
+  // 岗位效率曲线见 01 §3.2：x≤N 效率=x/N；x>N 效率=max(0, 1−k(x−N)/N)
+  overstaffK: 2.5,    // 超员惩罚系数 k≈2~3（待原型验证；hardCapJobs=false 时才生效）
+  hardCapJobs: true,  // 设计变更 2026-09-29：超员严格劣势（第N+1人净亏）→ 默认禁止塞人，满岗即上限；改 false 恢复拥挤惩罚玩法
+  // 人口耗粮与饥荒（模块5，03 §3.2；全部占位，待原型验证）
+  grainPerCapita: 1,      // 每人每日耗粮
+  soldierGrainMult: 2,    // 兵耗粮倍数（02 §1.5，待原型验证）
+  famineBufferDays: 3,    // 饥荒阈值 = 全员日耗粮 × 3（存量不足 3 天即饥荒，不等粮尽）
+  faminePrestigeDrain: 2, // 饥荒期每日声望流失
+  starvePopLoss: 2,       // 粮尽断粮后每日饿死人数
+  // 军营与训练（模块7 + 2026-09-29 重构：士气退役，熟练度个体化；全部占位，待原型验证）
+  trainingDays: 5,        // 训练周期 D（天）
+  trainProfPerDay: 16,    // 熟练度 X：受训每日 +16%，满训出营 16×5=80%（不满值，剩余靠杀敌，模块11 接）
+  profPowerBase: 0.6,     // 战力系数 = 0.6 + 0.4×熟练度（0.66≈旧仓促0.6、0.92≈旧满练1.0，平滑衔接）
+  profPowerSpan: 0.4,
+  // 军饷与欠缴（模块8 + 重构：逃兵挂欠饷天数梯度，不再绕道士气；全部占位，待原型验证）
+  soldierPayPerDay: 1,    // 军饷：每兵每日耗钱（养兵=持续金钱出血）
+  desertBase: 0.10,       // 欠饷第 1 日逃兵率 10%
+  desertPerDay: 0.05,     // 每多欠 1 日 +5%（低熟练度兵优先跑——新兵无归属感）
+  buildings: {
+    farm:   { label: '农田',   cost: { money: 20, wood: 10 }, capacity: 5, output: { grain: 12 } },
+    lumber: { label: '伐木场', cost: { money: 30, wood: 20 }, capacity: 4, output: { wood: 8 } },
+    mine:   { label: '矿洞',   cost: { money: 40, wood: 30 }, capacity: 4, output: { ore: 6 } },
+    smith:  { label: '铁匠铺', cost: { money: 50, wood: 40 }, capacity: 3, output: { weapons: 2 }, input: { wood: 4, ore: 4 } }, // 满岗日产武器2、耗木4矿4（待原型验证）
+    barracks: { label: '军营', cost: { money: 30, wood: 30 }, capacity: 4, output: null }, // capacity=营房容量（受训名额），无产出（待原型验证）
+  },
+  speeds: [1, 2, 4],    // 调试倍速档（开发期便利，非玩法内容）
+  maxLog: 8,            // 底部日志最大行数
+};
+
+// ============================ 全局状态 ============================
+const state = {
+  day: CONFIG.startDay,   // 当前游戏日
+  dayProgress: 0,         // 当日进度 0~1
+  paused: false,
+  speedIdx: 0,            // CONFIG.speeds 下标
+  log: [],                // 开发日志（后续模块的事件提示也走这里）
+  res: Object.assign({}, CONFIG.start), // 八项状态（模块2），唯一数据源
+  grid: makeGrid(),       // 地块（模块3）：null 或 {type, workers}
+  buildMode: null,        // 当前放置中的建筑 key（模块3）
+  selected: null,         // 当前选中建筑 {r,c}（模块4）
+  hoverCell: null,        // 鼠标悬停地块 {r,c}（模块3）
+  mouse: { x: 0, y: 0 },
+  famine: false,          // 饥荒态（模块5）
+  grainNeed: CONFIG.start.pop * CONFIG.grainPerCapita, // 全员日耗粮（模块5，供 HUD 显示）
+  rushSoldiers: 0,        // （已废弃 2026-09-29 重构，保留字段只读兼容，恒为 0）
+  morale: 100,            // （已废弃 2026-09-29 重构：士气退役，入营即满不再跟踪；保留字段防旧引用报错）
+  troops: [],             // 兵源个体数组（重构新增）：每兵一条 {prof: 0~100 熟练度}；soldiers 为派生计数
+  unpaidDays: 0,          // 连续欠饷天数（模块8）
+  payNeed: 0,             // 当日军饷需求（模块8，供看板显示）
+  deserters: 0,           // 累计逃兵数（模块8，战报与复盘用）
+};
+
+function pushLog(text) {
+  state.log.push('第' + state.day + '日 · ' + text);
+  if (state.log.length > CONFIG.maxLog) state.log.shift();
+}
+
+// ============================ 资源数据层（模块2） ============================
+// 八项状态统一走这里读写；后续模块（建造扣钱、人口耗粮、发军饷…）只允许调 getRes/setRes/addRes
+const RES_LABEL = { grain: '粮', wood: '木', ore: '矿', weapons: '武器', money: '钱', pop: '民', soldiers: '兵', prestige: '声望' };
+const RES_KEYS = Object.keys(RES_LABEL);
+function getRes(k) { return state.res[k]; }
+function setRes(k, v) {
+  if (k === 'prestige') state.res[k] = Math.max(0, Math.min(100, Math.round(v))); // 声望 0~100（03 §3）
+  else state.res[k] = Math.max(0, Math.round(v)); // 其余不为负、取整（人口/兵为计数）
+  // 兵源同步（2026-09-29 重构）：soldiers 计数与 troops[] 个体数组始终一致。
+  // 增兵：先由调用方 push 好 {prof} 再置计数（此处只兜底补 prof:0）；减兵：移除熟练度最低者
+  // （低熟练度兵无归属感先跑——欠饷逃兵语义；模块11 战死若需指定阵亡者，先自行 splice 再减计数）。
+  if (k === 'soldiers') {
+    while (state.troops.length < state.res.soldiers) state.troops.push({ prof: 0 });
+    while (state.troops.length > state.res.soldiers) {
+      let mi = 0;
+      for (let i = 1; i < state.troops.length; i++) if (state.troops[i].prof < state.troops[mi].prof) mi = i;
+      state.troops.splice(mi, 1);
+    }
+  }
+  return state.res[k];
+}
+function addRes(k, delta) { return setRes(k, getRes(k) + delta); }
+function resSummary() {
+  return RES_KEYS.map(function (k) { return RES_LABEL[k] + getRes(k); }).join(' ');
+}
+
+// ============================ 网格与建造（模块3） ============================
+const GRID_ROWS = CONFIG.grid.rows, GRID_COLS = CONFIG.grid.cols, CELL = CONFIG.grid.cell;
+const gridX0 = Math.round((1280 - GRID_COLS * CELL) / 2);
+const gridY0 = 330; // 城墙剪影下方（与 renderScene 的 wallY 对应）
+function makeGrid() {
+  const g = [];
+  for (let r = 0; r < CONFIG.grid.rows; r++) { g.push([]); for (let c = 0; c < CONFIG.grid.cols; c++) g[r].push(null); }
+  return g;
+}
+function isOreSpot(r, c) {
+  return CONFIG.grid.oreSpots.some(function (p) { return p[0] === r && p[1] === c; });
+}
+function cellAt(mx, my) {
+  const c = Math.floor((mx - gridX0) / CELL), r = Math.floor((my - gridY0) / CELL);
+  return (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS) ? { r: r, c: c } : null;
+}
+// 建造校验：占地 / 矿点约束 / 资源，返回 {ok, reason}
+function canBuildAt(key, r, c) {
+  if (state.grid[r][c]) return { ok: false, reason: '此地已有建筑' };
+  // 军营全关隘限一座（2026-09-29 用户裁定）：军力上限由经济决定（粮/饷/人口），不由座位数决定；
+  // 多营只会给一个永远用不满的摆设（单营 0.8 兵/日吞吐 vs 养兵成本先绑死）。正式版走「军营扩建等级」路线。
+  if (key === 'barracks') {
+    let has = false;
+    eachBuilding(function (b) { if (b.type === 'barracks') has = true; });
+    if (has) return { ok: false, reason: '全关隘仅可设一座军营' };
+  }
+  const ore = isOreSpot(r, c);
+  if (ore && key !== 'mine') return { ok: false, reason: '矿点上只能建矿洞' };
+  if (!ore && key === 'mine') return { ok: false, reason: '矿洞必须建在矿点上' };
+  const cost = CONFIG.buildings[key].cost;
+  if (getRes('money') < cost.money) return { ok: false, reason: '钱不足（需 ' + cost.money + '）' };
+  if (getRes('wood') < cost.wood) return { ok: false, reason: '木不足（需 ' + cost.wood + '）' };
+  return { ok: true, reason: '' };
+}
+function tryBuild(key, r, c) {
+  const label = CONFIG.buildings[key].label;
+  const chk = canBuildAt(key, r, c);
+  if (!chk.ok) { pushLog('建造【' + label + '】失败：' + chk.reason); return false; }
+  const cost = CONFIG.buildings[key].cost;
+  addRes('money', -cost.money);
+  addRes('wood', -cost.wood);
+  state.grid[r][c] = { type: key, workers: 0, queue: [] }; // queue=军营训练队列（天数），模块7
+  // 建成即退出放置模式并选中该建筑 → 岗位面板立即弹出（可直接 + 上岗）
+  state.buildMode = null;
+  state.selected = { r: r, c: c };
+  pushLog('建成【' + label + '】（钱-' + cost.money + ' 木-' + cost.wood + '）→ 已打开岗位面板');
+  return true;
+}
+function demolish(r, c) {
+  const b = state.grid[r][c];
+  if (!b) return false;
+  const def = CONFIG.buildings[b.type];
+  const rm = Math.floor(def.cost.money / 2), rw = Math.floor(def.cost.wood / 2);
+  addRes('money', rm);
+  addRes('wood', rw);
+  state.grid[r][c] = null;
+  if (state.selected && state.selected.r === r && state.selected.c === c) state.selected = null;
+  pushLog('拆除【' + def.label + '】，返还 钱' + rm + ' 木' + rw);
+  return true;
+}
+
+// ============================ 游戏日时钟 ============================
+// 每日结算管线（模块2）：后续模块按核心循环顺序往 dailySettlers 注册
+// —— 产出入库（模块4/6）→ 人口耗粮（模块5）→ 军粮军饷（模块8）→ 朝廷拨付（模块14）→ …
+const dailySettlers = [];
+function settleDay(day) {
+  for (const fn of dailySettlers) fn(day);
+  pushLog('日结：' + resSummary());
+}
+
+// 日切钩子：模块10 波次判定等也在这里接入
+function onNewDay(day) {
+  settleDay(day);
+  if (day === CONFIG.siegeDay) pushLog('【预警】探马回报：总攻就在今日！（占位）');
+}
+
+// ============================ 岗位与产出（模块4） ============================
+function eachBuilding(fn) {
+  for (let r = 0; r < GRID_ROWS; r++)
+    for (let c = 0; c < GRID_COLS; c++)
+      if (state.grid[r][c]) fn(state.grid[r][c], r, c);
+}
+// 岗位效率曲线（01 §3.2）：x≤N → x/N；x>N → max(0, 1−k(x−N)/N)
+function effOf(b) {
+  const N = CONFIG.buildings[b.type].capacity, x = b.workers;
+  if (x <= 0) return 0;
+  if (x <= N) return x / N;
+  return Math.max(0, 1 - CONFIG.overstaffK * (x - N) / N);
+}
+function assignedTotal() {
+  let n = 0;
+  eachBuilding(function (b) { n += b.workers; });
+  return n;
+}
+function idlePop() { return getRes('pop') - assignedTotal(); } // 训兵占位在模块7加入
+function assignWorker(b, d) {
+  if (d > 0) {
+    if (CONFIG.hardCapJobs && b.workers >= CONFIG.buildings[b.type].capacity) { pushLog('岗位已满'); return false; }
+    if (idlePop() <= 0) { pushLog('闲民不足，无法上岗'); return false; }
+  }
+  if (d < 0 && b.workers <= 0) return false;
+  b.workers += d;
+  return true;
+}
+// 产线产出计算（模块6 扩展）：按效率折算，原料不足按最紧原料比例限产
+function productionOf(b) {
+  const def = CONFIG.buildings[b.type];
+  const e = effOf(b);
+  const outKey = def.output ? Object.keys(def.output)[0] : null;
+  const r = { outKey: outKey, outVal: 0, limited: false, consumed: {} };
+  if (!outKey || e <= 0) return r;
+  let factor = 1;
+  if (def.input) {
+    Object.keys(def.input).forEach(function (k) {
+      const need = def.input[k] * e;
+      if (need > 0 && getRes(k) < need) {
+        factor = Math.min(factor, getRes(k) / need);
+        r.limited = true;
+      }
+    });
+  }
+  r.outVal = def.output[outKey] * e * factor;
+  if (def.input) {
+    Object.keys(def.input).forEach(function (k) { r.consumed[k] = def.input[k] * e * factor; });
+  }
+  return r;
+}
+// 当日收支估算（2026-09-29 用户反馈加入）：产线收入 vs 日常消耗（全员口粮、铁匠原料），
+// 与日结管线同源（productionOf），供收支看板与危机分析
+function dailyFlows() {
+  const f = { grain: { i: 0, o: 0 }, wood: { i: 0, o: 0 }, ore: { i: 0, o: 0 }, weapons: { i: 0, o: 0 } };
+  let smithLimited = false;
+  eachBuilding(function (b) {
+    const p = productionOf(b);
+    if (p.limited) smithLimited = true;
+    if (p.outKey && p.outVal > 0) {
+      f[p.outKey].i += p.outVal;
+      Object.keys(p.consumed).forEach(function (k) { f[k].o += p.consumed[k]; });
+    }
+  });
+  f.grain.o += state.grainNeed; // 全员口粮（民 + 兵×倍数，模块5 管线维护）
+  return { flows: f, smithLimited: smithLimited };
+}
+// 日产出（接入日结管线，核心循环第①环「收结算」）：农田→粮 伐木场→木 矿洞→矿 铁匠铺→武器（耗木矿）
+dailySettlers.push(function produce(day) {
+  const gain = {}, loss = {};
+  eachBuilding(function (b) {
+    const p = productionOf(b);
+    if (!p || p.outVal <= 0) return;
+    gain[p.outKey] = (gain[p.outKey] || 0) + p.outVal;
+    Object.keys(p.consumed).forEach(function (k) { loss[k] = (loss[k] || 0) + p.consumed[k]; });
+  });
+  const parts = [];
+  Object.keys(loss).forEach(function (k) {
+    const v = Math.round(loss[k]);
+    if (v > 0) { addRes(k, -v); parts.push(RES_LABEL[k] + '-' + v); }
+  });
+  Object.keys(gain).forEach(function (k) {
+    const v = Math.round(gain[k]);
+    if (v > 0) { addRes(k, v); parts.push(RES_LABEL[k] + '+' + v); }
+  });
+  if (parts.length) pushLog('产出：' + parts.join(' '));
+});
+// 日耗粮（模块5，接在产出之后：先入库后开饭）+ 饥荒动态阈值 + 断粮饿死
+dailySettlers.push(function consume(day) {
+  const pop = getRes('pop'), sol = getRes('soldiers');
+  const need = pop * CONFIG.grainPerCapita + sol * CONFIG.grainPerCapita * CONFIG.soldierGrainMult;
+  state.grainNeed = need;
+  const eaten = Math.min(getRes('grain'), need);
+  addRes('grain', -eaten);
+  // 饥荒动态阈值（03 §3.2）：存量不足缓冲天数即进入饥荒，不等粮尽
+  const threshold = need * CONFIG.famineBufferDays;
+  const wasFamine = state.famine;
+  state.famine = getRes('grain') < threshold;
+  if (state.famine && !wasFamine) pushLog('【饥荒】粮存不足 ' + CONFIG.famineBufferDays + ' 天，民怨渐起（声望每日-' + CONFIG.faminePrestigeDrain + '）');
+  if (!state.famine && wasFamine) pushLog('【饥荒解除】粮存回升至安全线');
+  if (state.famine) addRes('prestige', -CONFIG.faminePrestigeDrain);
+  // 粮尽断粮：饿死减人口
+  if (eaten < need) {
+    const dead = Math.min(pop, CONFIG.starvePopLoss);
+    addRes('pop', -dead);
+    pushLog('【断粮】口粮缺口 ' + (need - eaten) + '，饿死 ' + dead + ' 人！');
+  }
+});
+
+// 军饷与欠缴（模块8 + 2026-09-29 重构）：日结顺序=产出→耗粮→军饷→训练。
+// 欠饷判定链：钱不够发 → unpaidDays 累积 → 逃兵率 = desertBase + desertPerDay×(unpaidDays-1)（确定性 ceil；
+// setRes 减兵自动移除熟练度最低者=新兵先跑）。士气退役后不再有士气打击项。兵变留正式版。
+dailySettlers.push(function pay(day) {
+  const sol = getRes('soldiers');
+  const need = sol * CONFIG.soldierPayPerDay;
+  state.payNeed = need;
+  if (sol <= 0) { state.unpaidDays = 0; return; } // 无兵不欠饷
+  const paid = Math.min(getRes('money'), need);
+  addRes('money', -paid);
+  if (paid >= need) {
+    if (state.unpaidDays > 0) pushLog('【军饷补齐】军心回稳');
+    state.unpaidDays = 0;
+    return;
+  }
+  // 欠饷日：逃兵率随欠饷天数升级
+  state.unpaidDays += 1;
+  const rate = CONFIG.desertBase + CONFIG.desertPerDay * (state.unpaidDays - 1);
+  const flee = Math.min(sol, Math.ceil(sol * rate));
+  if (flee > 0) {
+    state.deserters += flee;
+    addRes('soldiers', -flee);
+    pushLog('【欠饷】第 ' + state.unpaidDays + ' 日发不出军饷（缺 ' + Math.round(need - paid) + ' 钱）→ 逃兵 ' + flee + ' 人（新兵先跑），明日逃兵率升至 ' + Math.round((CONFIG.desertBase + CONFIG.desertPerDay * state.unpaidDays) * 100) + '%');
+  }
+});
+
+// ============================ 军营与训练（模块7，02 §1.5） ============================
+// 受训者占用闲民（b.workers 同步队列长）且仍耗粮（还在 pop 里，走模块5 日耗粮）
+function sendTrainee(b) {
+  if (b.queue.length >= CONFIG.buildings.barracks.capacity) { pushLog('营房已满'); return false; }
+  if (idlePop() <= 0) { pushLog('闲民不足，无法送训'); return false; }
+  b.queue.push(CONFIG.trainingDays);
+  b.workers = b.queue.length;
+  pushLog('送训 1 人（' + CONFIG.trainingDays + ' 日成兵，受训期照常耗粮）');
+  return true;
+}
+function removeTrainee(b) { // 退训：回池，无惩罚
+  if (!b.queue.length) return false;
+  b.queue.pop();
+  b.workers = b.queue.length;
+  return true;
+}
+function rushConscript(b) { // 提前征召：全营仓促成军——熟练度 = X×已训天数（重构后无士气打击，账更硬）
+  const n = b.queue.length;
+  if (!n) return false;
+  let minProf = 100;
+  b.queue.forEach(function (left) {
+    const prof = CONFIG.trainProfPerDay * (CONFIG.trainingDays - left);
+    state.troops.push({ prof: prof });
+    if (prof < minProf) minProf = prof;
+  });
+  setRes('soldiers', getRes('soldiers') + n);
+  addRes('pop', -n);
+  b.queue = [];
+  b.workers = 0;
+  pushLog('【提前征召】' + n + ' 人仓促成军（熟练度 ' + Math.round(minProf) + '%~' + Math.round(CONFIG.trainProfPerDay * (CONFIG.trainingDays - 1)) + '%，低于满训）');
+  return true;
+}
+// 训练进度（日结）：期满转正为满训兵（熟练度 80%，不满值；剩余靠杀敌，模块11 接）
+dailySettlers.push(function train(day) {
+  eachBuilding(function (b) {
+    if (b.type !== 'barracks' || !b.queue.length) return;
+    const before = b.queue.length;
+    b.queue = b.queue.map(function (d) { return d - 1; }).filter(function (d) { return d > 0; });
+    b.workers = b.queue.length;
+    const done = before - b.queue.length;
+    if (done > 0) {
+      for (let i = 0; i < done; i++) state.troops.push({ prof: CONFIG.trainProfPerDay * CONFIG.trainingDays });
+      setRes('soldiers', getRes('soldiers') + done);
+      addRes('pop', -done);
+      pushLog('训练完成：' + done + ' 名新兵入伍（熟练度 ' + CONFIG.trainProfPerDay * CONFIG.trainingDays + '%）');
+    }
+  });
+});
+
+function advanceClock(dtRealSec) {
+  if (state.paused) return;
+  const speed = CONFIG.speeds[state.speedIdx];
+  const prev = state.dayProgress;
+  state.dayProgress += (dtRealSec * speed) / CONFIG.dayLengthSec;
+  while (state.dayProgress >= 1) {
+    state.dayProgress -= 1;
+    state.day += 1;
+    onNewDay(state.day);
+  }
+  void prev;
+}
+
+// ============================ 输入（按钮命中 + 键盘） ============================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// HUD 按钮注册表：render 时写入 {x,y,w,h,action}，click 时命中检测
+const buttons = [];
+
+canvas.addEventListener('click', function (e) {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+  for (const b of buttons) {
+    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+      b.action();
+      return;
+    }
+  }
+  const cell = cellAt(mx, my);
+  // 选中建筑（模块4）：点已有建筑永远打开岗位面板（含建造模式下，避免误触建造失败）
+  if (cell && state.grid[cell.r][cell.c]) {
+    state.selected = cell;
+    return;
+  }
+  // 空地（模块3）：建造模式下放置，否则取消选中
+  if (state.buildMode) {
+    if (cell) tryBuild(state.buildMode, cell.r, cell.c);
+    return;
+  }
+  state.selected = null;
+});
+
+canvas.addEventListener('mousemove', function (e) {
+  const rect = canvas.getBoundingClientRect();
+  state.mouse.x = (e.clientX - rect.left) * (W / rect.width);
+  state.mouse.y = (e.clientY - rect.top) * (H / rect.height);
+  state.hoverCell = cellAt(state.mouse.x, state.mouse.y);
+});
+
+canvas.addEventListener('contextmenu', function (e) {
+  e.preventDefault();
+  // 右键：优先取消放置模式；否则点已有建筑 = 拆除（模块3）
+  if (state.buildMode) { pushLog('取消放置'); state.buildMode = null; return; }
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+  const cell = cellAt(mx, my);
+  if (cell) demolish(cell.r, cell.c);
+});
+
+window.addEventListener('keydown', function (e) {
+  if (e.code === 'Space') { togglePause(); e.preventDefault(); return; }
+  if (e.code === 'Escape' && state.buildMode) { state.buildMode = null; pushLog('取消放置'); return; }
+  // 调试（模块2 验收用，正式前移除）：数字键 1~8 对应八项资源 +10，Shift+数字 -10
+  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8'].indexOf(e.code);
+  if (idx >= 0 && idx < RES_KEYS.length) {
+    const d = e.shiftKey ? -10 : 10;
+    addRes(RES_KEYS[idx], d);
+    pushLog('调试：' + RES_LABEL[RES_KEYS[idx]] + (d > 0 ? '+' : '') + d);
+  }
+});
+
+function togglePause() {
+  state.paused = !state.paused;
+  pushLog(state.paused ? '（暂停）' : '（继续）');
+}
+
+// ============================ 绘制工具 ============================
+function drawButton(x, y, w, h, label, active, action, disabled) {
+  buttons.push({ x: x, y: y, w: w, h: h, label: label, action: disabled ? function () {} : action });
+  if (disabled) {
+    ctx.fillStyle = '#2a251d';
+  } else {
+    ctx.fillStyle = active ? '#6b5320' : '#3a3226';
+  }
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#8a7648';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.fillStyle = disabled ? '#6b6150' : (active ? '#f2e3b6' : '#c9bd9e');
+  ctx.font = '14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+}
+
+// ============================ 分区绘制 ============================
+// 顶部 HUD：日计数 / 总攻倒计时占位 / 暂停与倍速按钮
+function renderHUD() {
+  ctx.fillStyle = '#26201a';
+  ctx.fillRect(0, 0, W, 56);
+  ctx.strokeStyle = '#4a3f2e';
+  ctx.beginPath(); ctx.moveTo(0, 56.5); ctx.lineTo(W, 56.5); ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e8dcc0';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('第 ' + state.day + ' 日', 24, 28);
+
+  // 当日时辰进度条
+  const barX = 130, barY = 20, barW = 180, barH = 16;
+  ctx.fillStyle = '#17130e';
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = '#a8832e';
+  ctx.fillRect(barX, barY, barW * state.dayProgress, barH);
+  ctx.strokeStyle = '#6b5b38';
+  ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+
+  // 总攻倒计时（占位，模块10 接入波次日程）
+  const left = CONFIG.siegeDay - state.day;
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = left <= 5 ? '#d95745' : '#c9bd9e';
+  ctx.fillText(left > 0 ? '距总攻：' + left + ' 日（占位）' : '【总攻进行中】（占位）', 340, 28);
+
+  // 资源面板（模块2 八项状态实时读出；模块16 再打磨视觉与预警灯）
+  ctx.fillStyle = '#c9bd9e';
+  ctx.font = '13px sans-serif';
+  ctx.fillText(resSummary(), 620, 20);
+  // 粮食安全线（模块5）：黄灯=逼近饥荒线，红灯=饥荒中
+  const gNow = getRes('grain'), threshold = state.grainNeed * CONFIG.famineBufferDays;
+  ctx.font = '12px sans-serif';
+  if (state.famine) {
+    ctx.fillStyle = '#ff8a7a';
+    ctx.fillText('耗粮 ' + state.grainNeed + '/日 · 饥荒线 ' + threshold + ' ·【饥荒中】', 620, 40);
+  } else if (gNow < threshold * 2) {
+    ctx.fillStyle = '#efb63c';
+    ctx.fillText('耗粮 ' + state.grainNeed + '/日 · 饥荒线 ' + threshold + ' · 粮存偏低', 620, 40);
+  } else {
+    ctx.fillStyle = '#7a6f58';
+    ctx.fillText('耗粮 ' + state.grainNeed + '/日 · 饥荒线 ' + threshold, 620, 40);
+  }
+
+  // 暂停 / 倍速按钮
+  drawButton(W - 260, 14, 110, 28, state.paused ? '▶ 继续' : '⏸ 暂停', state.paused, togglePause);
+  const sp = CONFIG.speeds[state.speedIdx];
+  drawButton(W - 138, 14, 110, 28, '倍速 ×' + sp, sp > 1, function () {
+    state.speedIdx = (state.speedIdx + 1) % CONFIG.speeds.length;
+  });
+}
+
+// 中部场景：占位（模块3 网格地图 / 模块9 城墙分段 接入）
+function renderScene() {
+  const top = 56, bottom = H - 120;
+  // 天色随日进度微变（纯氛围，反馈时钟在走）
+  const t = state.dayProgress;
+  const sky = 24 + Math.round(14 * Math.sin(t * Math.PI));
+  ctx.fillStyle = 'rgb(' + sky + ',' + (sky + 4) + ',' + (sky + 12) + ')';
+  ctx.fillRect(0, top, W, bottom - top);
+
+  // 远景：关外（上）与关内（下）分界的一道城墙剪影
+  const wallY = top + (bottom - top) * 0.42;
+  ctx.fillStyle = '#3d362a';
+  ctx.fillRect(0, wallY, W, 26);
+  ctx.fillStyle = '#4a4234';
+  for (let x = 0; x < W; x += 46) ctx.fillRect(x + 4, wallY - 10, 30, 12); // 垛口
+  ctx.fillStyle = '#2c2618';
+  ctx.fillRect(0, wallY + 26, W, bottom - wallY - 26); // 关内地面
+
+  ctx.fillStyle = '#6b5f47';
+  ctx.font = '15px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('关 外（敌来向）', W / 2, top + 36);
+  ctx.fillText('城 墙 防 线（模块9 分段布防接入）', W / 2, wallY + 48);
+}
+
+// 经营区网格（模块3）
+function renderGrid() {
+  for (let r = 0; r < GRID_ROWS; r++) {
+    for (let c = 0; c < GRID_COLS; c++) {
+      const x = gridX0 + c * CELL, y = gridY0 + r * CELL;
+      const b = state.grid[r][c];
+      ctx.fillStyle = isOreSpot(r, c) ? '#3a3a44' : '#332d1f';
+      ctx.fillRect(x, y, CELL, CELL);
+      // 放置模式悬停：绿=可建 红=不可建（即时反馈，失败原因见日志）
+      if (state.buildMode && state.hoverCell && state.hoverCell.r === r && state.hoverCell.c === c) {
+        ctx.fillStyle = canBuildAt(state.buildMode, r, c).ok ? 'rgba(120,200,90,0.35)' : 'rgba(210,80,60,0.35)';
+        ctx.fillRect(x, y, CELL, CELL);
+      }
+      ctx.strokeStyle = '#4a4234';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1);
+      // 选中高亮（模块4）
+      if (state.selected && state.selected.r === r && state.selected.c === c) {
+        ctx.strokeStyle = '#e8c860';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1.5, y + 1.5, CELL - 3, CELL - 3);
+      }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      if (b) {
+        const colors = { farm: '#6a8f3c', lumber: '#7a5a33', mine: '#5a5a66', smith: '#8a4a3a', barracks: '#4a5a7a' };
+        ctx.fillStyle = colors[b.type];
+        ctx.fillRect(x + 3, y + 3, CELL - 6, CELL - 6);
+        ctx.fillStyle = '#f2e3b6';
+        ctx.font = '13px sans-serif';
+        ctx.fillText(CONFIG.buildings[b.type].label, x + CELL / 2, y + CELL / 2 - 9);
+        // 在岗人数（模块4）：超员红字
+        const cap = CONFIG.buildings[b.type].capacity;
+        ctx.fillStyle = b.workers > cap ? '#ff8a7a' : '#d8cdb2';
+        ctx.font = '11px sans-serif';
+        ctx.fillText('人 ' + b.workers + '/' + cap, x + CELL / 2, y + CELL / 2 + 11);
+      } else if (isOreSpot(r, c)) {
+        ctx.fillStyle = '#9a9aa6';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('◆矿脉', x + CELL / 2, y + CELL / 2);
+      }
+    }
+  }
+}
+
+// 岗位面板（模块4）：选中建筑后右侧弹出，+/- 在岗人口，实时显示效率与超员警示
+function renderBuildingPanel() {
+  const px = 1010, py = 70, pw = 230, ph = 176; // 军营分支信息多一行（军饷），加高防重叠
+  if (!state.selected) {
+    // 未选中时的占位提示：告诉玩家面板在哪、怎么打开
+    ctx.fillStyle = '#221c14';
+    ctx.fillRect(px, py, pw, ph);
+    ctx.strokeStyle = '#4a3f2e';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#8a7c5e';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('岗 位 面 板', px + 12, py + 30);
+    ctx.fillStyle = '#6b6150';
+    ctx.fillText('点击任意建筑', px + 12, py + 56);
+    ctx.fillText('即可打开岗位面板', px + 12, py + 76);
+    return;
+  }
+  const b = state.grid[state.selected.r] && state.grid[state.selected.r][state.selected.c];
+  if (!b) { state.selected = null; return; }
+  const def = CONFIG.buildings[b.type];
+  ctx.fillStyle = '#221c14';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#4a3f2e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  // 军营专属面板（模块7）：受训名额/训练进度/士气
+  if (b.type === 'barracks') {
+    const n = b.queue.length, cap = def.capacity;
+    ctx.fillStyle = '#e8dcc0';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText('【军营】训务', px + 12, py + 20);
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = '#c9bd9e';
+    ctx.fillText('受训：' + n + ' / ' + cap + '（' + CONFIG.trainingDays + ' 日成兵）', px + 12, py + 42);
+    if (n) {
+      const minLeft = Math.min.apply(null, b.queue), maxLeft = Math.max.apply(null, b.queue);
+      ctx.fillText(minLeft === maxLeft ? '进度：剩 ' + minLeft + ' 日' : '进度：剩 ' + minLeft + '~' + maxLeft + ' 日', px + 12, py + 62);
+    } else {
+      ctx.fillText('进度：空闲中', px + 12, py + 62);
+    }
+    // 部队熟练度（2026-09-29 重构：士气退役）：满训 80%，杀敌补满 100%（模块11 接）
+    const t = state.troops;
+    let line3;
+    if (!t.length) {
+      line3 = '部队：暂无在编兵';
+    } else {
+      const avg = t.reduce(function (s, x) { return s + x.prof; }, 0) / t.length;
+      const veteran = t.filter(function (x) { return x.prof >= 100; }).length;
+      const recruit = t.filter(function (x) { return x.prof < CONFIG.trainProfPerDay * CONFIG.trainingDays; }).length;
+      line3 = '部队：' + t.length + ' 人 · 平均熟练 ' + Math.round(avg) + '% · 未满训 ' + recruit + ' · 老兵 ' + veteran;
+    }
+    ctx.fillStyle = '#c9bd9e';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(line3, px + 12, py + 82);
+    ctx.fillStyle = state.unpaidDays > 0 ? '#ff8a7a' : '#8a7c5e';
+    ctx.fillText(state.unpaidDays > 0 ? '军饷：欠 ' + state.unpaidDays + ' 日 · 逃兵率 ' + Math.round((CONFIG.desertBase + CONFIG.desertPerDay * state.unpaidDays) * 100) + '%' : '军饷：' + state.payNeed + ' 钱/日 · 已发齐', px + 12, py + 102);
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop'), px + 12, py + 122);
+    // 2026-09-29 修复：旧版「+ 送训」与「提前征召」共用一个按钮位（队列非空即切换标签），
+    // 导致送训 1 人后再也无法继续送训。改为三按钮并存，各自独立禁用条件。
+    drawButton(px + 10, py + 140, 66, 24, '− 退训', false, function () { removeTrainee(b); }, n <= 0);
+    drawButton(px + 80, py + 140, 66, 24, '+ 送训', false, function () { sendTrainee(b); }, n >= cap || idlePop() <= 0);
+    drawButton(px + 150, py + 140, 70, 24, '提前征召', false, function () { rushConscript(b); }, n <= 0);
+    return;
+  }
+  ctx.fillStyle = '#e8dcc0';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('【' + def.label + '】岗位', px + 12, py + 20);
+  const eff = effOf(b);
+  const over = b.workers > def.capacity;
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = over ? '#ff8a7a' : '#c9bd9e';
+  ctx.fillText('在岗：' + b.workers + ' / ' + def.capacity + (over ? '（超员！）' : ''), px + 12, py + 44);
+  ctx.fillStyle = '#c9bd9e';
+  const p = productionOf(b);
+  let line2 = '效率：' + Math.round(eff * 100) + '%';
+  if (p && p.outKey) {
+    line2 += ' · 日产 ' + RES_LABEL[p.outKey] + ' ' + Math.round(p.outVal);
+  }
+  ctx.fillText(line2, px + 12, py + 66);
+  if (def.input && p && p.outKey) {
+    const inStr = Object.keys(def.input).map(function (k) { return RES_LABEL[k] + Math.round(def.input[k] * eff); }).join(' ');
+    ctx.fillStyle = p.limited ? '#ff8a7a' : '#8a7c5e';
+    ctx.fillText('耗 ' + inStr + '/日' + (p.limited ? ' · 原料不足，限产！' : ''), px + 12, py + 88);
+  } else {
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText('　', px + 12, py + 88);
+  }
+  ctx.fillStyle = '#8a7c5e';
+  ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop'), px + 12, py + 110);
+  drawButton(px + 12, py + 122, 90, 24, '− 撤岗', false, function () { assignWorker(b, -1); }, b.workers <= 0);
+  drawButton(px + 128, py + 122, 90, 24, b.workers >= def.capacity ? '岗位已满' : '+ 上岗', false,
+    function () { assignWorker(b, +1); }, CONFIG.hardCapJobs && b.workers >= def.capacity || idlePop() <= 0);
+}
+
+// 当日收支看板（模块16 HUD 打磨前的先行版）：让玩家看懂「为什么粮在掉」
+function renderLedger() {
+  const px = 40, py = 70, pw = 200, ph = 178;
+  ctx.fillStyle = '#221c14';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#4a3f2e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e8dcc0';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillText('当日收支（估）', px + 12, py + 18);
+  const d = dailyFlows();
+  ctx.font = '12px sans-serif';
+  let y = py + 42;
+  ['grain', 'wood', 'ore', 'weapons'].forEach(function (k) {
+    const fl = d.flows[k];
+    const net = fl.i - fl.o;
+    ctx.fillStyle = '#c9bd9e';
+    ctx.fillText(RES_LABEL[k], px + 12, y);
+    ctx.fillStyle = '#8fae66';
+    ctx.fillText('+' + Math.round(fl.i), px + 36, y);
+    ctx.fillStyle = fl.o > 0 ? '#d98a5a' : '#6b6150';
+    ctx.fillText('−' + Math.round(fl.o), px + 84, y);
+    ctx.fillStyle = net < 0 ? '#ff8a7a' : (net > 0 ? '#a8c98a' : '#6b6150');
+    ctx.fillText('净' + (net > 0 ? '+' : '') + Math.round(net), px + 132, y);
+    y += 18;
+  });
+  // 钱行（模块8 接入）：军饷支出 + 拨付收入（模块14 前为 0）
+  const moneyIn = 0; // 朝廷拨付待模块14
+  const moneyNet = moneyIn - state.payNeed;
+  ctx.fillStyle = '#c9bd9e';
+  ctx.fillText('钱', px + 12, y);
+  ctx.fillStyle = '#8fae66';
+  ctx.fillText('+' + moneyIn, px + 36, y);
+  ctx.fillStyle = state.payNeed > 0 ? '#d98a5a' : '#6b6150';
+  ctx.fillText('−' + Math.round(state.payNeed), px + 84, y);
+  ctx.fillStyle = moneyNet < 0 ? '#ff8a7a' : '#6b6150';
+  ctx.fillText('净' + moneyNet, px + 132, y);
+  y += 22;
+  // 危机分析：按优先级给一句人话 + 对策
+  const g = getRes('grain');
+  const netG = d.flows.grain.i - d.flows.grain.o;
+  const threshold = state.grainNeed * CONFIG.famineBufferDays;
+  ctx.font = '12px sans-serif';
+  if (state.famine) {
+    ctx.fillStyle = '#ff8a7a';
+    ctx.fillText('【饥荒中】先保粮！', px + 12, y);
+    y += 16;
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText('对策：扩农田 / 撤岗转农 / 减兵', px + 12, y);
+  } else if (netG < 0) {
+    const days = Math.max(0, Math.ceil((g - threshold) / -netG));
+    ctx.fillStyle = '#efb63c';
+    ctx.fillText('粮净' + Math.round(netG) + '/日，约' + days + '日后触饥荒线', px + 12, y);
+    y += 16;
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText('对策：扩农田 / 减兵撤训', px + 12, y);
+  } else if (state.unpaidDays > 0) {
+    ctx.fillStyle = '#ff8a7a';
+    ctx.fillText('【欠饷】第 ' + state.unpaidDays + ' 日！士气暴跌逃兵中', px + 12, y);
+    y += 16;
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText('对策：卖粮筹钱？（模块14 拨付前钱源有限）', px + 12, y);
+  } else if (d.smithLimited) {
+    ctx.fillStyle = '#efb63c';
+    ctx.fillText('铁匠铺缺原料限产', px + 12, y);
+    y += 16;
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText('对策：补矿洞 / 伐木场', px + 12, y);
+  } else {
+    ctx.fillStyle = '#8fae66';
+    ctx.fillText('收支平稳', px + 12, y);
+  }
+}
+
+// 建造面板（模块3）：左侧竖排，含造价；放置提示与拆除说明
+function renderPalette() {
+  const px = 40, pw = 140;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#8a7c5e';
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillText('建 造', px, gridY0 - 18);
+  let y = gridY0 + 4;
+  Object.keys(CONFIG.buildings).forEach(function (key) {
+    const def = CONFIG.buildings[key];
+    drawButton(px, y, pw, 28, def.label, state.buildMode === key, function () {
+      state.buildMode = (state.buildMode === key) ? null : key;
+    });
+    ctx.fillStyle = '#7a6f58';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('钱' + def.cost.money + '  木' + def.cost.wood, px + 6, y + 38);
+    y += 44; // 2026-09-29 修复：旧步距 62 时 5 个建筑溢出进底部日志区，军营按钮被盖住
+  });
+  ctx.font = '12px sans-serif';
+  if (state.buildMode) {
+    ctx.fillStyle = '#e8dcc0';
+    ctx.fillText('放置【' + CONFIG.buildings[state.buildMode].label + '】：左键点地块', px, y + 8);
+    ctx.fillText('右键 / Esc 取消', px, y + 26);
+  } else {
+    ctx.fillStyle = '#7a6f58';
+    ctx.fillText('右键点已有建筑 = 拆除（返还一半）', px, y + 8);
+    ctx.fillText('建成后自动打开岗位面板', px, y + 26);
+  }
+}
+
+// 底部日志区：日切与事件反馈（后续模块共用 pushLog）
+function renderLog() {
+  const y0 = H - 120;
+  ctx.fillStyle = '#1a1510';
+  ctx.fillRect(0, y0, W, 120);
+  ctx.strokeStyle = '#4a3f2e';
+  ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(W, y0 + 0.5); ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = '13px sans-serif';
+  state.log.forEach(function (line, i) {
+    ctx.fillStyle = i === state.log.length - 1 ? '#e8dcc0' : '#7a6f58';
+    ctx.fillText(line, 24, y0 + 12 + i * 13);
+  });
+}
+
+// 暂停遮罩
+function renderPauseOverlay() {
+  if (!state.paused) return;
+  ctx.fillStyle = 'rgba(10, 8, 6, 0.45)';
+  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillStyle = '#f2e3b6';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('已 暂 停（空格 / 按钮继续）', W / 2, H / 2);
+}
+
+function render() {
+  buttons.length = 0;
+  ctx.clearRect(0, 0, W, H);
+  renderScene();
+  renderGrid();
+  renderPalette();
+  renderLedger();
+  renderBuildingPanel();
+  renderHUD();
+  renderLog();
+  renderPauseOverlay();
+}
+
+// ============================ 主循环 ============================
+let lastTs = 0;
+function frame(ts) {
+  if (!lastTs) lastTs = ts;
+  const dt = Math.min((ts - lastTs) / 1000, 0.25); // 切后台回来防跳变
+  lastTs = ts;
+  advanceClock(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+pushLog('关隘开局，游戏日时钟启动（空格暂停/继续）');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
