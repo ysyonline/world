@@ -110,24 +110,29 @@ console.assert(getRes('ore') === 6, 'M6 矿洞照常产矿');
 render();
 
 // ---- 模块7+重构：军营 + 训练 + 个体熟练度 ----
-setRes('money', 300); setRes('wood', 200); setRes('grain', 500); setRes('pop', 20); setRes('soldiers', 0);
+// 注意：M6 推进时钟跨过第 15 日，波次战斗会自动 paused=true，后续 advanceClock 前必须复位
+state.paused = false;
+setRes('money', 300); setRes('wood', 200); setRes('grain', 500); setRes('pop', 20); setRes('soldiers', 0); setRes('weapons', 10);
 console.assert(tryBuild('barracks', 2, 4) === true, 'M7 建军营');
 const bar = state.grid[2][4];
 const idleA = idlePop();
-console.assert(sendTrainee(bar) === true && idlePop() === idleA - 1 && bar.queue[0] === CONFIG.trainingDays, 'M7 送训占闲民、进队列');
-sendTrainee(bar);
+console.assert(sendTrainee(bar, 'melee') === true && idlePop() === idleA - 1 && bar.queue[0].left === CONFIG.trainingDays && bar.queue[0].type === 'melee', 'M7 送训占闲民、进队列、选营');
+console.assert(getRes('weapons') === 9, 'M7 送训耗武器 1');
+sendTrainee(bar, 'archer');
 console.assert(bar.queue.length === 2, 'M7 再送训 1 人');
-console.assert(sendTrainee(bar) === true && removeTrainee(bar) === true && bar.queue.length === 2, 'M7 退训回池');
+console.assert(sendTrainee(bar, 'melee') === true && removeTrainee(bar) === true && bar.queue.length === 2, 'M7 退训回池');
 const s0 = getRes('soldiers'), p0 = getRes('pop');
 advanceClock(31 * CONFIG.trainingDays); // 5 天期满
 console.assert(getRes('soldiers') === s0 + 2 && getRes('pop') === p0 - 2, 'M7 期满成兵 民-2 兵+2');
 console.assert(bar.queue.length === 0, 'M7 队列清空');
 console.assert(state.troops.length === 2 && state.troops.every(t => t.prof === CONFIG.trainProfPerDay * CONFIG.trainingDays), 'R 满训出营熟练度 80%，got ' + JSON.stringify(state.troops.map(t => t.prof)));
+console.assert(state.troops[0].type === 'melee' && state.troops[1].type === 'archer', 'M11 三营制：出营即定兵种');
 // 提前征召：训 1 日后征召 → 熟练度 16%（士气已退役，无打击项）
-sendTrainee(bar);
+sendTrainee(bar, 'crew');
 advanceClock(31); // 训 1 日
 console.assert(rushConscript(bar) === true, 'R 提前征召');
 console.assert(state.troops[state.troops.length - 1].prof === CONFIG.trainProfPerDay * 1, 'R 训1日征召熟练度 16%，got ' + state.troops[state.troops.length - 1].prof);
+console.assert(state.troops[state.troops.length - 1].type === 'crew', 'M11 征召兵带营种=普通营');
 console.assert(state.morale === 100, 'R 士气退役：征召后士气字段恒 100');
 // 减兵移除最低熟练度（新兵先跑语义）
 const profsBefore = state.troops.map(t => t.prof);
@@ -141,11 +146,12 @@ advanceClock(31);
 console.assert(getRes('grain') === 1000 - (p1 + s1 * 2), 'M7 兵耗粮×2 生效，got ' + getRes('grain'));
 // ---- 反馈修复（2026-09-29）：军营三按钮 / 收支看板 / 建造面板不溢出 ----
 state.selected = { r: 2, c: 4 }; // 选中军营
-console.assert(sendTrainee(bar) === true, 'FIX 队列空送训');
+console.assert(sendTrainee(bar, 'melee') === true, 'FIX 队列空送训');
 render();
 const lbl = buttons.map(b => b.label);
-console.assert(lbl.indexOf('+ 送训') >= 0 && lbl.indexOf('提前征召') >= 0 && lbl.indexOf('− 退训') >= 0, 'FIX 军营三按钮并存');
-console.assert(sendTrainee(bar) === true, 'FIX 队列非空仍可继续送训（旧版按钮会变成提前征召）');
+console.assert(lbl.indexOf('+弓') >= 0 && lbl.indexOf('+近') >= 0 && lbl.indexOf('+普') >= 0 && lbl.indexOf('− 退训') >= 0, 'M11 军营三营按钮并存');
+console.assert(lbl.some(x => x.indexOf('提前征召') >= 0), 'FIX 提前征召按钮');
+console.assert(sendTrainee(bar, 'archer') === true, 'FIX 队列非空仍可继续送训');
 state.grid[0][0].workers = 5; // 满岗农田，验证看板数据源
 const d = dailyFlows();
 console.assert(Math.round(d.flows.grain.i) === 12, 'FIX 看板：满岗农田粮收入 12，got ' + d.flows.grain.i);
@@ -176,10 +182,11 @@ advanceClock(31);
 const expectFlee2 = Math.min(sol1, Math.ceil(sol1 * (CONFIG.desertBase + CONFIG.desertPerDay * 1)));
 console.assert(state.unpaidDays === 2, 'M8 欠饷日数 2');
 console.assert(getRes('soldiers') === sol1 - expectFlee2, 'M8 逃兵率升级：ceil(' + sol1 + '×0.15)=' + expectFlee2 + '，got ' + (sol1 - getRes('soldiers')));
-// 补钱 → 欠饷清零
+// 补钱 → 欠饷清零（此日跨第 26 日波次，战斗后时钟被暂停，后续推进前先复位）
 setRes('money', 50);
 advanceClock(31);
 console.assert(state.unpaidDays === 0, 'M8 补钱后欠饷清零');
+state.paused = false;
 // 无兵不欠饷：清空受训队列（FIX 段塞的人会到期毕业干扰计数）→ 全撤后 unpaidDays 归零、troops 同步清空
 bar.queue = []; bar.workers = 0;
 setRes('soldiers', 0); state.unpaidDays = 3;
@@ -247,6 +254,7 @@ const wk2 = pickTargetSeg();
 console.assert(wk2 !== 2, 'M10 檑木抬升防御评分，最弱段不选丙，got ' + wk2);
 state.segLogs[2] = 0;
 // 波次触发（自备日程：前面模块测试已把时钟推过默认波次日）：
+// 职责划分：M10 只断言「日程触发/去重/推进」，战斗结算细节由 M11 场景负责——不造兵，无人防守必破门
 const base = state.day;
 CONFIG.waves = [
   { day: base + 1, size: 4,  siege: false, label: '小股骚扰' },
@@ -254,22 +262,100 @@ CONFIG.waves = [
   { day: base + 9, size: 12, siege: true,  label: '总攻' },
 ];
 state.waveFired = {}; state.enemies = [];
+state.gateHp = [CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp]; // 复位：前面默认波次已耗损城门
+state.cityFallen = false; state.battleReport = null;
 setRes('grain', 5000); setRes('money', 5000); setRes('soldiers', 0); state.unpaidDays = 0;
-advanceClock(31); // base+1 日：第 1 波触发
-console.assert(state.enemies.length === 4, 'M10 第1波 4 敌集结，got ' + state.enemies.length);
-console.assert(state.enemies.every(e => e.seg === state.enemies[0].seg && !e.siege), 'M10 骚扰波同段、非总攻');
+advanceClock(31); state.paused = false; // base+1 日：第 1 波触发并当日结算（空防被破门）
+console.assert(state.waveFired[0] === true && state.battleReport && state.battleReport.enemySize === 4, 'M10 第1波触发并结算');
 console.assert(state.log.some(x => x.indexOf('【小股骚扰】') >= 0), 'M10 骚扰日志');
-advanceClock(31); // base+2 日：不重复触发
-console.assert(state.enemies.length === 4, 'M10 每波只触发一次');
+const rep1 = state.battleReport;
+advanceClock(31); state.paused = false; // base+2 日：不重复触发
+console.assert(state.battleReport === rep1, 'M10 每波只触发一次（无新战报）');
 console.assert(nextWave().wave.day === base + 5, 'M10 下一波日程正确');
-advanceClock(31 * 4); // base+5：第 2 波
-console.assert(state.enemies.length === 9, 'M10 第2波后累计 9 敌，got ' + state.enemies.length);
-advanceClock(31 * 4); // base+9：总攻
-console.assert(state.enemies.length === 21 && state.enemies.filter(e => e.siege).length === 12, 'M10 总攻 12 敌入列');
+advanceClock(31 * 3); state.paused = false; // base+5：第 2 波（拆步推进，防日志环形缓冲挤出波次日志）
+console.assert(state.waveFired[1] === true && state.battleReport.enemySize === 5, 'M10 第2波触发');
+console.assert(state.log.some(x => x.indexOf('【大股袭扰】') >= 0), 'M10 第2波日志');
+advanceClock(31 * 3); state.paused = false; // base+8
+advanceClock(31); state.paused = false; // base+9：总攻（空防必破）
+console.assert(state.waveFired[2] === true && state.battleReport.siege === true, 'M10 总攻触发');
 console.assert(state.log.some(x => x.indexOf('【总攻】') >= 0), 'M10 总攻日志');
+console.assert(state.cityFallen === true, 'M10 空防总攻=城破');
 console.assert(nextWave() === null, 'M10 全部波次已触发');
 render();
-console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防 + 模块10 波次)');
+
+// ---- 模块11：守城战结算（RTS 塔防式） ----
+state.paused = false;
+// 场景A：弓兵营+檑木（有普通营操作员，无近战）全歼 4 敌小股骚扰，零伤亡
+state.troops.forEach(function (t) { t.seg = null; });
+state.enemies = []; state.cityFallen = false; state.captives = 0; state.battleReport = null;
+state.gateHp = [CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp];
+setRes('soldiers', 0); setRes('grain', 500); setRes('money', 500); setRes('pop', 20);
+// 造兵：2 弓（80%）、1 普通营（80%）守甲段
+setRes('soldiers', 3);
+state.troops[0] = { prof: 80, seg: 0, type: 'archer' };
+state.troops[1] = { prof: 80, seg: 0, type: 'archer' };
+state.troops[2] = { prof: 80, seg: 0, type: 'crew' };
+state.segLogs[0] = 2; // 2 座檑木，普通营兵驻守 → 生效
+const repA = resolveBattle(0, { siege: false, size: 4, day: state.day });
+// 血池承伤：每轮 2×0.92×1.5+2×1=4.76 伤 → 12 血池 3 轮清空
+console.assert(repA.kills === 4 && !repA.breached, 'M11-A 全歼 4 敌，got kills=' + repA.kills);
+console.assert(repA.captives === Math.ceil(4 * CONFIG.captiveRate), 'M11-A 俘虏 2 人');
+console.assert(repA.meleeDead === 0, 'M11-A 无近战参战，零伤亡');
+console.assert(state.captives === 2, 'M11-A 俘虏入账');
+// 无近战堵门：残敌每轮砸门——第1轮 3 敌×2=6、第2轮 1 敌×2=2，共 8 伤（塔防竞速正确行为）
+console.assert(state.gateHp[0] === CONFIG.gateMaxHp - 8 && repA.gateDmg === 8, 'M11-A 无近战堵门门损 8，got ' + state.gateHp[0]);
+// 场景B：空防段（无兵无檑木）被 4 敌破门 → 抢粮杀民降声望
+state.gateHp[1] = 4; // 乙段门只剩 4 血
+const grainB = getRes('grain'), popB = getRes('pop'), presB = getRes('prestige');
+const repB = resolveBattle(1, { siege: false, size: 4, day: state.day });
+// 4 敌 × 2 伤/轮 = 8 伤 > 4 血 → 第 1 轮破门；残敌 4 人抢掠
+console.assert(repB.breached && repB.gateDmg >= 4, 'M11-B 空防段被破门');
+console.assert(repB.lootGrain === 4 * CONFIG.lootGrainPerEnemy && getRes('grain') === grainB - 20, 'M11-B 抢粮 20');
+console.assert(repB.lootPop === 4 * CONFIG.lootPopPerEnemy && getRes('pop') === popB - 4, 'M11-B 杀民 4');
+console.assert(repB.lootPrestige === CONFIG.lootPrestigeLoss && getRes('prestige') === presB - 3, 'M11-B 声望 -3');
+// 场景C：总攻破门 → 城破标记
+state.gateHp[2] = 2;
+const repC = resolveBattle(2, { siege: true, size: 12, day: state.day });
+console.assert(repC.breached && state.cityFallen === true, 'M11-C 总攻破门=城破标记');
+// 场景D：开战检溃——段均熟练 < 25% → 低熟练兵临阵脱逃
+state.cityFallen = false;
+setRes('soldiers', 3);
+state.troops[0] = { prof: 16, seg: 3, type: 'melee' };
+state.troops[1] = { prof: 16, seg: 3, type: 'archer' };
+state.troops[2] = { prof: 16, seg: 3, type: 'crew' };
+const desB = state.deserters;
+const repD = resolveBattle(3, { siege: false, size: 4, day: state.day });
+console.assert(repD.fled === 3 && state.deserters === desB + 3, 'M11-D 全员低熟练临阵脱逃，got fled=' + repD.fled);
+console.assert(getRes('soldiers') === 0, 'M11-D 逃兵永久减兵');
+// 场景E：近战堵门互搏——敌杀近战最低熟练先死，永久减人口
+setRes('soldiers', 2); setRes('pop', 20);
+state.troops[0] = { prof: 80, seg: 0, type: 'melee' };
+state.troops[1] = { prof: 16, seg: 0, type: 'melee' };
+state.gateHp[0] = CONFIG.gateMaxHp;
+const popE = getRes('pop');
+const repE = resolveBattle(0, { siege: false, size: 4, day: state.day });
+// 无弓无檑木：近战输出 0.92+0.664=1.584 伤/轮 < 12 血 → 杀不光；敌杀近战 floor(4×0.34)=1/轮
+console.assert(repE.meleeDead > 0 && getRes('pop') === popE - repE.meleeDead, 'M11-E 近战互搏死人=永久减人口');
+console.assert(state.troops.every(t => t.prof >= 16), 'M11-E 低熟练先死');
+// 修城门：扣钱木恢复满血
+setRes('money', 100); setRes('wood', 50);
+state.gateHp[0] = 4; // 缺 6 血 → 钱12 木6
+console.assert(repairGate(0) === true && state.gateHp[0] === CONFIG.gateMaxHp && getRes('money') === 88 && getRes('wood') === 44, 'M11 修城门扣费回血');
+console.assert(repairGate(0) === false, 'M11 门完好拒修');
+// 檑木无普通营兵=死木头：移除普通营，同配置再打输出腰斩
+setRes('soldiers', 2);
+state.troops[0] = { prof: 80, seg: 0, type: 'archer' };
+state.troops[1] = { prof: 80, seg: 0, type: 'archer' };
+state.gateHp[0] = CONFIG.gateMaxHp; state.segLogs[0] = 2;
+const repF = resolveBattle(0, { siege: false, size: 4, day: state.day });
+// 弓 2×0.92×1.5=2.76 伤/轮：第1轮杀0（池 9.24→4 敌），门 10−8=2；第2轮杀1（池 6.48→3 敌），门 2−6 破 → 仅杀 1 敌
+console.assert(repF.kills === 1 && repF.breached, 'M11 无普通营兵檑木不生效：输出腰斩被破门，got kills=' + repF.kills);
+// 战报驱动暂停与关闭
+state.battleReport = repA; state.paused = true;
+render();
+console.assert(buttons.some(b => b.label === '关 闭'), 'M11 战报面板关闭按钮');
+render();
+console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防 + 模块10 波次 + 模块11 守城战)');
 `;
 
 eval(code + test);

@@ -56,6 +56,14 @@
  *          集结关外（个体带目标段，默认最弱段优先=战力+檑木加权最低，策略 CONFIG 可切）；
  *          关外显示敌兵标记（总攻红字）；HUD 倒计时转正式「距下一波：N 日」≤3 日红字 + 探马预警；
  *          每波只触发一次；战斗结算留模块11（切片纪律：无战中操作）。
+ *   模块11：守城战结算（RTS 塔防式，2026-09-29 用户定调）——敌破门 vs 我杀敌竞速：
+ *          三营制（送训选营：弓兵营/近战营/普通营，每兵耗武器 1；存量通用兵=普通营=檑木操作工）；
+ *          城门每段独立血 10（耐久累积不修不回），修城门每点 钱2木1；
+ *          轮次循环：弓齐射（零伤亡）→ 檑木砸（需普通营驻守，否则死木头）→ 敌行动
+ *          （有近战堵门则互搏杀敌死近战[最低熟练先死=永久减人口]，无近战则砸门）；
+ *          敌总血池承伤（伤害跨轮累积）；骚扰 3 轮未破即退、总攻不死不休（10 轮兜底）；
+ *          开战检溃：段均熟练<25% → 低熟练兵临阵脱逃；全歼→俘虏半数（模块12 处置）；
+ *          骚扰破门→抢粮杀民降声望；总攻破门→城破标记（模块15 渲染）；战报弹面板+自动暂停。
  *
  * 架构约定（供后续 16 个模块挂靠）：
  *   - CONFIG：全部数值占位集中于此，改参只动这里（切片验收标准 §7.4）；
@@ -105,6 +113,24 @@ const CONFIG = {
   ],
   enemyHp: 3,           // 敌兵生命（占位，模块11 结算用，待原型验证）
   raidWarnDays: 3,      // 波次前 N 日探马预警
+  // 守城战结算（模块11，RTS 塔防式：敌破门 vs 我杀敌 竞速；全部占位，待原型验证，模块17统一调）
+  troopTypes: { archer: '弓兵营', melee: '近战营', crew: '普通营' }, // 营名占位，正式版查史据定
+  trainWeaponCost: 1,   // 送训每兵耗武器（已确认：打通 矿→铁匠铺→武器→兵 产业链）
+  archerCoef: 1.5,      // 弓兵营每轮输出 = Σ单兵战力 × 系数（城上齐射，零伤亡）
+  crewLogDmg: 1,        // 普通营操作檑木：每座檑木每轮杀伤（需有普通营兵驻守该段，否则檑木=死木头）
+  meleeCoef: 1.0,       // 近战营互搏杀敌输出系数（城门口堵门，唯一承伤兵种）
+  enemyMeleeCoef: 0.34, // 敌杀近战：每轮 floor(敌数×系数)，最低熟练先死=永久减人口
+  gateDmgPerEnemy: 2,   // 无近战堵门时，每敌每轮砸门伤害
+  gateMaxHp: 10,        // 每段城门血（材质系统正式版，切片固定占位）
+  gateRepairMoney: 2,   // 修城门：每点血 钱2 木1（耐久累积，战后不自动恢复）
+  gateRepairWood: 1,
+  raidRounds: 3,        // 骚扰波最多轮数（未破门即退走）
+  siegeRounds: 10,      // 总攻轮次上限（不死不休，兜底防死循环）
+  routProfFloor: 25,    // 开战检溃：段均熟练低于此值 → 低熟练兵临阵脱逃（锚 prof 低端）
+  captiveRate: 0.5,     // 全歼敌时俘虏比例（向上取整，模块12 处置）
+  lootGrainPerEnemy: 5, // 骚扰破门：每残敌抢粮
+  lootPopPerEnemy: 1,   // 骚扰破门：每残敌杀民
+  lootPrestigeLoss: 3,  // 骚扰破门：声望损失
   buildings: {
     farm:   { label: '农田',   cost: { money: 20, wood: 10 }, capacity: 5, output: { grain: 12 } },
     lumber: { label: '伐木场', cost: { money: 30, wood: 20 }, capacity: 4, output: { wood: 8 } },
@@ -133,7 +159,7 @@ const state = {
   grainNeed: CONFIG.start.pop * CONFIG.grainPerCapita, // 全员日耗粮（模块5，供 HUD 显示）
   rushSoldiers: 0,        // （已废弃 2026-09-29 重构，保留字段只读兼容，恒为 0）
   morale: 100,            // （已废弃 2026-09-29 重构：士气退役，入营即满不再跟踪；保留字段防旧引用报错）
-  troops: [],             // 兵源个体数组（重构新增）：每兵一条 {prof: 0~100, seg: null|0~3}；soldiers 为派生计数
+  troops: [],             // 兵源个体数组：每兵一条 {prof: 0~100, seg: null|0~3, type: 'archer'|'melee'|'crew'}；soldiers 为派生计数
   unpaidDays: 0,          // 连续欠饷天数（模块8）
   payNeed: 0,             // 当日军饷需求（模块8，供看板显示）
   deserters: 0,           // 累计逃兵数（模块8，战报与复盘用）
@@ -144,6 +170,11 @@ const state = {
   // 敌情（模块10）：enemies[] 个体 {seg: 目标墙段, siege: 总攻与否}；战斗结算留模块11（切片纪律：无战中操作）
   enemies: [],            // 当前在关外集结的敌兵
   waveFired: {},          // 波次去重：波次下标 → true（每波只触发一次）
+  // 守城战（模块11）：城门耐久累积（不自动恢复，修门花钱木）；战报驱动自动暂停
+  gateHp: [CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp],
+  captives: 0,            // 在押俘虏（模块12 处置：杀/关押）
+  battleReport: null,     // 最新战报（弹面板用，关闭后仍留档供复盘）
+  cityFallen: false,      // 总攻破门 → 城破标记（模块15 渲染败局）
 };
 
 function pushLog(text) {
@@ -163,7 +194,7 @@ function setRes(k, v) {
   // 增兵：先由调用方 push 好 {prof} 再置计数（此处只兜底补 prof:0）；减兵：移除熟练度最低者
   // （低熟练度兵无归属感先跑——欠饷逃兵语义；模块11 战死若需指定阵亡者，先自行 splice 再减计数）。
   if (k === 'soldiers') {
-    while (state.troops.length < state.res.soldiers) state.troops.push({ prof: 0, seg: null }); // 新兵默认城内待命
+    while (state.troops.length < state.res.soldiers) state.troops.push({ prof: 0, seg: null, type: 'crew' }); // 兜底补的普通兵=普通营
     while (state.troops.length > state.res.soldiers) {
       let mi = 0;
       for (let i = 1; i < state.troops.length; i++) if (state.troops[i].prof < state.troops[mi].prof) mi = i;
@@ -395,17 +426,21 @@ dailySettlers.push(function pay(day) {
   }
 });
 
-// ============================ 军营与训练（模块7，02 §1.5） ============================
+// ============================ 军营与训练（模块7 + 模块11 三营制，02 §1.5） ============================
 // 受训者占用闲民（b.workers 同步队列长）且仍耗粮（还在 pop 里，走模块5 日耗粮）
-function sendTrainee(b) {
+// 三营制（2026-09-29 用户拍板）：送训时选营，出营即定兵种；每兵耗武器 trainWeaponCost；
+// 存量通用兵归入普通营（crew）——驻守檑木的操作工
+function sendTrainee(b, type) {
   if (b.queue.length >= CONFIG.buildings.barracks.capacity) { pushLog('营房已满'); return false; }
   if (idlePop() <= 0) { pushLog('闲民不足，无法送训'); return false; }
-  b.queue.push(CONFIG.trainingDays);
+  if (getRes('weapons') < CONFIG.trainWeaponCost) { pushLog('武器不足（送训每兵需武器 ' + CONFIG.trainWeaponCost + '）'); return false; }
+  addRes('weapons', -CONFIG.trainWeaponCost);
+  b.queue.push({ left: CONFIG.trainingDays, type: type });
   b.workers = b.queue.length;
-  pushLog('送训 1 人（' + CONFIG.trainingDays + ' 日成兵，受训期照常耗粮）');
+  pushLog('送训 1 人入【' + CONFIG.troopTypes[type] + '】（' + CONFIG.trainingDays + ' 日成兵，耗武器 ' + CONFIG.trainWeaponCost + '）');
   return true;
 }
-function removeTrainee(b) { // 退训：回池，无惩罚
+function removeTrainee(b) { // 退训：回池，无惩罚（武器已耗不返还——装备已发）
   if (!b.queue.length) return false;
   b.queue.pop();
   b.workers = b.queue.length;
@@ -415,9 +450,9 @@ function rushConscript(b) { // 提前征召：全营仓促成军——熟练度 
   const n = b.queue.length;
   if (!n) return false;
   let minProf = 100;
-  b.queue.forEach(function (left) {
-    const prof = CONFIG.trainProfPerDay * (CONFIG.trainingDays - left);
-    state.troops.push({ prof: prof });
+  b.queue.forEach(function (t) {
+    const prof = CONFIG.trainProfPerDay * (CONFIG.trainingDays - t.left);
+    state.troops.push({ prof: prof, seg: null, type: t.type });
     if (prof < minProf) minProf = prof;
   });
   setRes('soldiers', getRes('soldiers') + n);
@@ -432,14 +467,16 @@ dailySettlers.push(function train(day) {
   eachBuilding(function (b) {
     if (b.type !== 'barracks' || !b.queue.length) return;
     const before = b.queue.length;
-    b.queue = b.queue.map(function (d) { return d - 1; }).filter(function (d) { return d > 0; });
+    const grads = [];
+    b.queue = b.queue.filter(function (t) { t.left -= 1; if (t.left > 0) return true; grads.push(t.type); return false; });
     b.workers = b.queue.length;
-    const done = before - b.queue.length;
-    if (done > 0) {
-      for (let i = 0; i < done; i++) state.troops.push({ prof: CONFIG.trainProfPerDay * CONFIG.trainingDays });
-      setRes('soldiers', getRes('soldiers') + done);
-      addRes('pop', -done);
-      pushLog('训练完成：' + done + ' 名新兵入伍（熟练度 ' + CONFIG.trainProfPerDay * CONFIG.trainingDays + '%）');
+    if (grads.length > 0) {
+      grads.forEach(function (type) { state.troops.push({ prof: CONFIG.trainProfPerDay * CONFIG.trainingDays, seg: null, type: type }); });
+      setRes('soldiers', getRes('soldiers') + grads.length);
+      addRes('pop', -grads.length);
+      const byType = {};
+      grads.forEach(function (t) { byType[t] = (byType[t] || 0) + 1; });
+      pushLog('训练完成：' + grads.length + ' 名新兵入伍（' + Object.keys(byType).map(function (t) { return CONFIG.troopTypes[t] + '×' + byType[t]; }).join(' ') + '，熟练度 ' + CONFIG.trainProfPerDay * CONFIG.trainingDays + '%）');
     }
   });
 });
@@ -537,6 +574,160 @@ dailySettlers.push(function raidWarning() {
   const nw = nextWave();
   if (nw && nw.wave.day - state.day <= CONFIG.raidWarnDays && nw.wave.day > state.day) {
     pushLog('【探马】' + nw.wave.day + ' 日将有 ' + (nw.wave.siege ? '总攻' : nw.wave.label) + '（约 ' + nw.wave.size + ' 人），速布防！');
+  }
+});
+
+// ============================ 守城战结算（模块11，RTS 塔防式：敌破门 vs 我杀敌 竞速） ============================
+// 结构：波次日日结 → 该段开战（开战检溃 → 轮次循环[弓齐射→檑木砸→敌行动]）→ 战报+自动暂停。
+// 兵种分工：弓兵营城上齐射零伤亡 / 普通营驻守滚檑木零伤亡 / 近战营城门口堵门唯一承伤（永久减人口）。
+function troopsByType(seg, type) {
+  const arr = [];
+  state.troops.forEach(function (t, i) { if (t.seg === seg && t.type === type) arr.push(i); });
+  return arr;
+}
+// 开战检溃（锚 prof 低端）：段均熟练 < routProfFloor → 该段低熟练兵临阵脱逃（永久损失，计逃兵）
+function routCheck(seg) {
+  const idx = troopsInSeg(seg);
+  if (!idx.length) return 0;
+  const avg = idx.reduce(function (s, i) { return s + state.troops[i].prof; }, 0) / idx.length;
+  if (avg >= CONFIG.routProfFloor) return 0;
+  let fled = 0;
+  // 从后往前删，避免下标漂移
+  for (let i = state.troops.length - 1; i >= 0; i--) {
+    if (state.troops[i].seg === seg && state.troops[i].prof < CONFIG.routProfFloor) {
+      state.troops.splice(i, 1);
+      state.res.soldiers -= 1; // 直接改计数（已 splice，不走 setRes 防二次同步）
+      fled++;
+    }
+  }
+  if (fled) state.deserters += fled;
+  return fled;
+}
+// 单场守城战结算：返回战报对象（全确定性，无随机）
+function resolveBattle(seg, wave) {
+  const segName = CONFIG.wall.segNames[seg];
+  const rep = {
+    seg: seg, segName: segName, siege: wave.siege, enemySize: wave.size,
+    fled: 0, kills: 0, meleeDead: 0, captives: 0, gateDmg: 0,
+    breached: false, lootGrain: 0, lootPop: 0, lootPrestige: 0, rounds: 0,
+  };
+  rep.fled = routCheck(seg);
+  // 敌总血池承伤：伤害跨轮累积不浪费（4.5 伤 = 杀 1 人 + 1.5 伤记入下轮）
+  let pool = wave.size * CONFIG.enemyHp;
+  let enemyAlive = wave.size;
+  const maxRounds = wave.siege ? CONFIG.siegeRounds : CONFIG.raidRounds;
+  for (let r = 1; r <= maxRounds && enemyAlive > 0; r++) {
+    rep.rounds = r;
+    let dmg = 0;
+    // ① 弓齐射（弓兵营，城上零伤亡）
+    troopsByType(seg, 'archer').forEach(function (i) { dmg += soldierPower(state.troops[i].prof) * CONFIG.archerCoef; });
+    // ② 檑木砸（普通营驻守才滚得动：有普通营兵的段檑木全部生效）
+    if (troopsByType(seg, 'crew').length > 0) dmg += state.segLogs[seg] * CONFIG.crewLogDmg;
+    pool -= dmg;
+    let aliveNow = Math.max(0, Math.ceil(pool / CONFIG.enemyHp));
+    rep.kills += enemyAlive - aliveNow;
+    enemyAlive = aliveNow;
+    if (enemyAlive <= 0) break;
+    // ③ 敌行动：有近战堵门则互搏（近战先输出，残敌再反杀）；无近战则砸门
+    const meleeIdx = troopsByType(seg, 'melee');
+    if (meleeIdx.length > 0) {
+      let mdmg = 0;
+      meleeIdx.forEach(function (i) { mdmg += soldierPower(state.troops[i].prof) * CONFIG.meleeCoef; });
+      pool -= mdmg;
+      aliveNow = Math.max(0, Math.ceil(pool / CONFIG.enemyHp));
+      rep.kills += enemyAlive - aliveNow;
+      enemyAlive = aliveNow;
+      // 敌杀近战：最低熟练先死（永久减人口）
+      let dead = Math.min(meleeIdx.length, Math.floor(enemyAlive * CONFIG.enemyMeleeCoef));
+      // 按熟练度升序选出死者，再按下标**降序** splice 防下标漂移删错人
+      const toDie = meleeIdx.slice()
+        .sort(function (a, b) { return state.troops[a].prof - state.troops[b].prof; })
+        .slice(0, dead)
+        .sort(function (a, b) { return b - a; });
+      toDie.forEach(function (ti) {
+        state.troops.splice(ti, 1);
+        state.res.soldiers -= 1;
+        rep.meleeDead++;
+      });
+      if (toDie.length > 0) addRes('pop', -toDie.length); // 战死=永久损失人口（03 §1）；按本轮死亡数扣，勿用累计值重复扣
+    } else {
+      // 无近战堵门 → 敌直接砸门
+      const gd = enemyAlive * CONFIG.gateDmgPerEnemy;
+      state.gateHp[seg] = Math.max(0, state.gateHp[seg] - gd);
+      rep.gateDmg += gd;
+      if (state.gateHp[seg] <= 0) { rep.breached = true; break; }
+    }
+  }
+  // 结局分支
+  if (rep.breached) {
+    if (wave.siege) {
+      state.cityFallen = true; // 总攻破门=城破（模块15 渲染败局）
+    } else {
+      // 骚扰破门：残敌入城抢掠后离去（抢粮+杀民+降声望）
+      rep.lootGrain = Math.min(getRes('grain'), enemyAlive * CONFIG.lootGrainPerEnemy);
+      rep.lootPop = Math.min(getRes('pop'), enemyAlive * CONFIG.lootPopPerEnemy);
+      rep.lootPrestige = CONFIG.lootPrestigeLoss;
+      addRes('grain', -rep.lootGrain);
+      addRes('pop', -rep.lootPop);
+      addRes('prestige', -rep.lootPrestige);
+    }
+    // 残敌破城后离去
+    state.enemies = state.enemies.filter(function (e) { return !(e.seg === seg && e.siege === wave.siege); });
+  } else if (enemyAlive <= 0) {
+    // 全歼：俘虏（模块12 处置）
+    rep.captives = Math.ceil(wave.size * CONFIG.captiveRate);
+    state.captives += rep.captives;
+    state.enemies = state.enemies.filter(function (e) { return !(e.seg === seg && e.siege === wave.siege); });
+  }
+  // 击退（未全歼未破门）：敌留关外，下日续战（总攻）或退走（骚扰已在轮次内结算完）
+  if (!rep.breached && enemyAlive > 0 && !wave.siege) {
+    state.enemies = state.enemies.filter(function (e) { return !(e.seg === seg && e.siege === wave.siege); });
+  }
+  return rep;
+}
+// 修城门（布防面板操作）：每点血 钱2木1，修满即止
+function repairGate(seg) {
+  const missing = CONFIG.gateMaxHp - state.gateHp[seg];
+  if (missing <= 0) { pushLog('城门完好，无需修缮'); return false; }
+  const costM = missing * CONFIG.gateRepairMoney, costW = missing * CONFIG.gateRepairWood;
+  if (getRes('money') < costM) { pushLog('修门需钱 ' + costM + '，不足'); return false; }
+  if (getRes('wood') < costW) { pushLog('修门需木 ' + costW + '，不足'); return false; }
+  addRes('money', -costM);
+  addRes('wood', -costW);
+  state.gateHp[seg] = CONFIG.gateMaxHp;
+  pushLog('修缮【' + CONFIG.wall.segNames[seg] + '】段城门（钱-' + costM + ' 木-' + costW + '），恢复至 ' + CONFIG.gateMaxHp + ' 血');
+  return true;
+}
+// 波次触发后当日即战（接在波次生成 settler 之后）；滞留的总攻残敌次日续战（不死不休）
+function fightAndReport(seg, w) {
+  const rep = resolveBattle(seg, w);
+  state.battleReport = rep;
+  state.paused = true; // 出战自动暂停，看战报
+  const segName = rep.segName;
+  if (rep.breached && rep.siege) {
+    pushLog('【城破】' + segName + '段城门被总攻轰塌！关隘陷落……');
+  } else if (rep.breached) {
+    pushLog('【失守】' + segName + '段城门被破！敌抢粮 ' + rep.lootGrain + '、杀民 ' + rep.lootPop + ' 后离去（声望-' + rep.lootPrestige + '）');
+  } else if (rep.kills >= rep.enemySize) {
+    pushLog('【捷报】' + segName + '段全歼敌军 ' + rep.enemySize + ' 人！俘虏 ' + rep.captives + '（近战殉国 ' + rep.meleeDead + '）');
+  } else {
+    pushLog('【击退】' + segName + '段守军击退敌军（歼敌 ' + rep.kills + '/' + rep.enemySize + '）');
+  }
+}
+dailySettlers.push(function battle(day) {
+  if (state.cityFallen) return; // 城已破，不再接战
+  // ① 今日新触发波次
+  for (let i = 0; i < CONFIG.waves.length; i++) {
+    const w = CONFIG.waves[i];
+    if (!state.waveFired[i] || day !== w.day) continue;
+    const seg = state.enemies.length ? state.enemies[state.enemies.length - 1].seg : pickTargetSeg();
+    fightAndReport(seg, w);
+    return; // 切片日程不重叠，一日一战
+  }
+  // ② 滞留总攻残敌续战（昨日未破门未全歼）
+  const sieges = state.enemies.filter(function (e) { return e.siege; });
+  if (sieges.length) {
+    fightAndReport(sieges[0].seg, { siege: true, size: sieges.length, day: day });
   }
 });
 
@@ -774,10 +965,17 @@ function renderScene() {
     ctx.font = '12px sans-serif';
     if (n > 0) {
       ctx.fillStyle = '#d8cdb2';
-      ctx.fillText('驻兵 ' + n, sx + segW / 2, wallY + 10);
+      const na2 = troopsByType(s, 'archer').length, nm2 = troopsByType(s, 'melee').length, nc2 = troopsByType(s, 'crew').length;
+      ctx.fillText('弓' + na2 + '近' + nm2 + '普' + nc2, sx + segW / 2, wallY + 10);
     } else {
       ctx.fillStyle = '#ff8a7a';
       ctx.fillText('∅ 无驻防', sx + segW / 2, wallY + 10);
+    }
+    // 城门血点（模块11）：垛口行靠左，每点血一格，掉血变暗
+    const gh2 = state.gateHp[s];
+    for (let g = 0; g < CONFIG.gateMaxHp; g++) {
+      ctx.fillStyle = g < gh2 ? '#8fae66' : '#3a3226';
+      ctx.fillRect(sx + 8 + g * 9, wallY + 20, 7, 4);
     }
     // 檑木图标（垛口行，靠右排布，与段名不重叠）
     if (state.segLogs[s] > 0) {
@@ -836,7 +1034,7 @@ function renderGrid() {
 
 // 岗位面板（模块4）：选中建筑后右侧弹出，+/- 在岗人口，实时显示效率与超员警示
 function renderBuildingPanel() {
-  const px = 1010, py = 70, pw = 230, ph = 176; // 军营分支信息多一行（军饷），加高防重叠
+  const px = 1010, py = 70, pw = 230, ph = 196; // 军营分支两行按钮（三营送训+提前征召），加高防重叠
   if (!state.selected) {
     // 未选中时的占位提示：告诉玩家面板在哪、怎么打开
     ctx.fillStyle = '#221c14';
@@ -896,12 +1094,14 @@ function renderBuildingPanel() {
     ctx.fillStyle = state.unpaidDays > 0 ? '#ff8a7a' : '#8a7c5e';
     ctx.fillText(state.unpaidDays > 0 ? '军饷：欠 ' + state.unpaidDays + ' 日 · 逃兵率 ' + Math.round((CONFIG.desertBase + CONFIG.desertPerDay * state.unpaidDays) * 100) + '%' : '军饷：' + state.payNeed + ' 钱/日 · 已发齐', px + 12, py + 102);
     ctx.fillStyle = '#8a7c5e';
-    ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop'), px + 12, py + 122);
-    // 2026-09-29 修复：旧版「+ 送训」与「提前征召」共用一个按钮位（队列非空即切换标签），
-    // 导致送训 1 人后再也无法继续送训。改为三按钮并存，各自独立禁用条件。
+    ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop') + ' · 武器 ' + getRes('weapons'), px + 12, py + 122);
+    // 三营送训（模块11 三营制：送训时选营，出营即定兵种；每兵耗武器 trainWeaponCost）
+    const canTrain = n < cap && idlePop() > 0 && getRes('weapons') >= CONFIG.trainWeaponCost;
     drawButton(px + 10, py + 140, 66, 24, '− 退训', false, function () { removeTrainee(b); }, n <= 0);
-    drawButton(px + 80, py + 140, 66, 24, '+ 送训', false, function () { sendTrainee(b); }, n >= cap || idlePop() <= 0);
-    drawButton(px + 150, py + 140, 70, 24, '提前征召', false, function () { rushConscript(b); }, n <= 0);
+    drawButton(px + 80, py + 140, 46, 24, '+弓', false, function () { sendTrainee(b, 'archer'); }, !canTrain);
+    drawButton(px + 130, py + 140, 46, 24, '+近', false, function () { sendTrainee(b, 'melee'); }, !canTrain);
+    drawButton(px + 180, py + 140, 40, 24, '+普', false, function () { sendTrainee(b, 'crew'); }, !canTrain);
+    drawButton(px + 10, py + 168, 210, 22, '提前征召（全营仓促成军）', false, function () { rushConscript(b); }, n <= 0);
     return;
   }
   ctx.fillStyle = '#e8dcc0';
@@ -934,10 +1134,10 @@ function renderBuildingPanel() {
     function () { assignWorker(b, +1); }, CONFIG.hardCapJobs && b.workers >= def.capacity || idlePop() <= 0);
 }
 
-// 布防面板（模块9）：选中墙段后右侧显示，+/- 驻兵与檑木，段战力实时可见（模块11 结算锚点）
+// 布防面板（模块9 + 模块11 城门/修门/兵种构成）：选中墙段后右侧显示
 function renderSegPanel() {
   if (state.selectedSeg === null) return;
-  const px = 1010, py = 258, pw = 230, ph = 150;
+  const px = 1010, py = 278, pw = 230, ph = 196;
   const s = state.selectedSeg;
   const name = CONFIG.wall.segNames[s];
   const seg = troopsInSeg(s);
@@ -951,24 +1151,40 @@ function renderSegPanel() {
   ctx.fillStyle = '#e8dcc0';
   ctx.font = 'bold 16px sans-serif';
   ctx.fillText('【' + name + '】墙段布防', px + 12, py + 20);
+  // 城门血条（模块11：耐久累积，战后不自动恢复）
+  const gh = state.gateHp[s], gm = CONFIG.gateMaxHp;
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = '#8a7c5e';
+  ctx.fillText('城门', px + 12, py + 40);
+  ctx.fillStyle = '#17130e';
+  ctx.fillRect(px + 52, py + 33, 120, 14);
+  ctx.fillStyle = gh <= 3 ? '#d95745' : (gh < gm ? '#efb63c' : '#8fae66');
+  ctx.fillRect(px + 52, py + 33, 120 * (gh / gm), 14);
+  ctx.strokeStyle = '#6b5b38';
+  ctx.strokeRect(px + 52.5, py + 33.5, 119, 13);
+  ctx.fillStyle = '#e8dcc0';
+  ctx.fillText(gh + '/' + gm, px + 180, py + 40);
+  // 兵种构成（模块11）：弓/近/普 分列
+  const na = troopsByType(s, 'archer').length, nm = troopsByType(s, 'melee').length, nc = troopsByType(s, 'crew').length;
   ctx.font = '13px sans-serif';
-  // 段战力 = Σ(0.6+0.4×prof/100)，供模块11 直接引用（待原型验证）
+  ctx.fillStyle = seg.length ? '#c9bd9e' : '#ff8a7a';
+  ctx.fillText('驻兵 ' + seg.length + '：弓' + na + ' 近' + nm + ' 普' + nc, px + 12, py + 60);
   const power = segPower(s);
   const avg = seg.length ? seg.reduce(function (sum, i) { return sum + state.troops[i].prof; }, 0) / seg.length : 0;
-  ctx.fillStyle = seg.length ? '#c9bd9e' : '#ff8a7a';
-  ctx.fillText('驻兵：' + seg.length + ' 人 · 战力 ' + power.toFixed(2), px + 12, py + 42);
   ctx.fillStyle = '#8a7c5e';
   ctx.font = '12px sans-serif';
-  ctx.fillText('均熟练 ' + Math.round(avg) + '% · 檑木 ' + state.segLogs[s] + '/' + CONFIG.wall.logMaxPerSeg, px + 12, py + 62);
-  ctx.fillText('未布防兵：' + reserveTroops().length + '（城内待命）', px + 12, py + 80);
-  // 三按钮并存（同军营面板教训：各占一位，禁用条件独立）
-  drawButton(px + 10, py + 96, 66, 24, '− 撤防', false, function () { withdrawTroop(s); }, seg.length <= 0);
-  drawButton(px + 80, py + 96, 66, 24, '+ 驻兵', false, function () { deployTroop(s); }, reserveTroops().length <= 0);
-  drawButton(px + 150, py + 96, 70, 24, state.segLogs[s] >= CONFIG.wall.logMaxPerSeg ? '檑木已满' : '+ 檑木', false,
+  ctx.fillText('战力 ' + power.toFixed(2) + ' · 均熟练 ' + Math.round(avg) + '%', px + 12, py + 78);
+  ctx.fillText('檑木 ' + state.segLogs[s] + '/' + CONFIG.wall.logMaxPerSeg + (state.segLogs[s] > 0 && nc === 0 ? '（无普通营兵，死木头！）' : ''), px + 12, py + 96);
+  ctx.fillText('未布防兵：' + reserveTroops().length, px + 12, py + 114);
+  // 行1：调兵；行2：檑木+修门
+  drawButton(px + 10, py + 130, 66, 24, '− 撤防', false, function () { withdrawTroop(s); }, seg.length <= 0);
+  drawButton(px + 80, py + 130, 66, 24, '+ 驻兵', false, function () { deployTroop(s); }, reserveTroops().length <= 0);
+  drawButton(px + 150, py + 130, 70, 24, state.segLogs[s] >= CONFIG.wall.logMaxPerSeg ? '檑木已满' : '+ 檑木', false,
     function () { placeLog(s); }, state.segLogs[s] >= CONFIG.wall.logMaxPerSeg || getRes('wood') < CONFIG.wall.logCost);
-  // 撤除檑木：右键点墙段图标区不便无头测试，补一个小按钮（返还一半，同拆除惯例）
-  drawButton(px + 10, py + 124, 210, 20, '− 撤除檑木（返还 ' + Math.floor(CONFIG.wall.logCost / 2) + ' 木）', false,
-    function () { removeLog(s); }, state.segLogs[s] <= 0);
+  const miss = gm - gh, costM = miss * CONFIG.gateRepairMoney, costW = miss * CONFIG.gateRepairWood;
+  drawButton(px + 10, py + 160, 104, 24, '− 撤除檑木', false, function () { removeLog(s); }, state.segLogs[s] <= 0);
+  drawButton(px + 118, py + 160, 102, 24, miss > 0 ? '修城门 钱' + costM + '木' + costW : '城门完好', false,
+    function () { repairGate(s); }, miss <= 0 || getRes('money') < costM || getRes('wood') < costW);
 }
 
 // 当日收支看板（模块16 HUD 打磨前的先行版）：让玩家看懂「为什么粮在掉」
@@ -1096,9 +1312,49 @@ function renderLog() {
   });
 }
 
+// 战报面板（模块11）：出战自动暂停后弹出，关报恢复
+function renderBattleReport() {
+  const rep = state.battleReport;
+  if (!rep || !state.paused) return;
+  const pw = 420, ph = 240, px = (W - pw) / 2, py = 130;
+  ctx.fillStyle = 'rgba(10, 8, 6, 0.55)';
+  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillStyle = '#221c14';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = rep.breached ? '#d95745' : '#8a7648';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = rep.breached ? '#ff8a7a' : '#e8dcc0';
+  ctx.font = 'bold 20px sans-serif';
+  const title = rep.breached && rep.siege ? '【城破 · 关隘陷落】'
+    : rep.breached ? '【失守 · ' + rep.segName + '段门破】'
+    : rep.kills >= rep.enemySize ? '【捷报 · ' + rep.segName + '段全歼】'
+    : '【击退 · ' + rep.segName + '段】';
+  ctx.fillText(title, px + pw / 2, py + 30);
+  ctx.textAlign = 'left';
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = '#c9bd9e';
+  const lines = [
+    '敌军规模：' + rep.enemySize + ' 人（' + (rep.siege ? '总攻' : '骚扰') + '） · 交战 ' + rep.rounds + ' 轮',
+    '歼敌：' + rep.kills + ' · 俘虏：' + rep.captives,
+    '我方战死：' + rep.meleeDead + '（近战营堵门） · 临阵脱逃：' + rep.fled,
+    '城门损伤：-' + rep.gateDmg + ' 血（现 ' + state.gateHp[rep.seg] + '/' + CONFIG.gateMaxHp + '）',
+  ];
+  if (rep.breached && !rep.siege) lines.push('被抢：粮 ' + rep.lootGrain + ' · 民 ' + rep.lootPop + ' · 声望 -' + rep.lootPrestige);
+  if (rep.breached && rep.siege) lines.push('总攻破门，城已破——败局结算见模块15');
+  lines.forEach(function (t, i) { ctx.fillText(t, px + 28, py + 66 + i * 24); });
+  drawButton(px + pw / 2 - 60, py + ph - 42, 120, 28, '关 闭', false, function () {
+    state.battleReport = null;
+    state.paused = false;
+    pushLog('（战报已阅，继续）');
+  });
+}
+
 // 暂停遮罩
 function renderPauseOverlay() {
-  if (!state.paused) return;
+  if (!state.paused || state.battleReport) return; // 战报在时由战报面板自带遮罩
   ctx.fillStyle = 'rgba(10, 8, 6, 0.45)';
   ctx.fillRect(0, 56, W, H - 56 - 120);
   ctx.fillStyle = '#f2e3b6';
@@ -1119,6 +1375,7 @@ function render() {
   renderSegPanel();
   renderHUD();
   renderLog();
+  renderBattleReport();
   renderPauseOverlay();
 }
 
