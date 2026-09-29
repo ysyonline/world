@@ -49,6 +49,9 @@
  *   重构（2026-09-29 用户裁决）：士气维度退役（结构性缺陷：单值士气下新兵白捡老兵状态）。
  *          熟练度个体化连续值：平民 0%、受训 +16%/日、满训出营 80% 不满值、杀敌补满 100%（模块11 接）；
  *          战力 = 0.6 + 0.4×熟练度；提前征召惩罚=熟练度天然变低；欠饷逃兵挂天数梯度。
+ *   模块9：城墙分 4 段（甲乙丙丁，占位）+ 布防——点墙段开布防面板，+/- 驻兵（个体带 seg 字段，
+ *          上墙取熟练度最高者、撤防回池撤该段最低者）；檑木按段放置（耗木5/上限2，返还一半）；
+ *          段战力 = Σ(0.6+0.4×prof/100) 实时可见（模块11 结算锚点）；空段 ∅ 红字提示。
  *
  * 架构约定（供后续 16 个模块挂靠）：
  *   - CONFIG：全部数值占位集中于此，改参只动这里（切片验收标准 §7.4）；
@@ -85,6 +88,8 @@ const CONFIG = {
   soldierPayPerDay: 1,    // 军饷：每兵每日耗钱（养兵=持续金钱出血）
   desertBase: 0.10,       // 欠饷第 1 日逃兵率 10%
   desertPerDay: 0.05,     // 每多欠 1 日 +5%（低熟练度兵优先跑——新兵无归属感）
+  // 城墙分段与布防（模块9；全部占位，待原型验证）
+  wall: { segNames: ['甲', '乙', '丙', '丁'], logCost: 5, logMaxPerSeg: 2 }, // 檑木：每座耗木5、每段上限2（待原型验证）
   buildings: {
     farm:   { label: '农田',   cost: { money: 20, wood: 10 }, capacity: 5, output: { grain: 12 } },
     lumber: { label: '伐木场', cost: { money: 30, wood: 20 }, capacity: 4, output: { wood: 8 } },
@@ -113,10 +118,14 @@ const state = {
   grainNeed: CONFIG.start.pop * CONFIG.grainPerCapita, // 全员日耗粮（模块5，供 HUD 显示）
   rushSoldiers: 0,        // （已废弃 2026-09-29 重构，保留字段只读兼容，恒为 0）
   morale: 100,            // （已废弃 2026-09-29 重构：士气退役，入营即满不再跟踪；保留字段防旧引用报错）
-  troops: [],             // 兵源个体数组（重构新增）：每兵一条 {prof: 0~100 熟练度}；soldiers 为派生计数
+  troops: [],             // 兵源个体数组（重构新增）：每兵一条 {prof: 0~100, seg: null|0~3}；soldiers 为派生计数
   unpaidDays: 0,          // 连续欠饷天数（模块8）
   payNeed: 0,             // 当日军饷需求（模块8，供看板显示）
   deserters: 0,           // 累计逃兵数（模块8，战报与复盘用）
+  // 布防（模块9）：troops[i].seg=null 未布防（城内待命）/ 0~3 墙段下标。
+  // seg 上墙/回池由布防函数维护个体 seg 字段；模块11 结算按 seg 点名。
+  selectedSeg: null,      // 当前选中墙段下标（模块9 面板）
+  segLogs: [0, 0, 0, 0],  // 每墙段檑木数（模块9，长度跟随 CONFIG.wall.segNames）
 };
 
 function pushLog(text) {
@@ -136,7 +145,7 @@ function setRes(k, v) {
   // 增兵：先由调用方 push 好 {prof} 再置计数（此处只兜底补 prof:0）；减兵：移除熟练度最低者
   // （低熟练度兵无归属感先跑——欠饷逃兵语义；模块11 战死若需指定阵亡者，先自行 splice 再减计数）。
   if (k === 'soldiers') {
-    while (state.troops.length < state.res.soldiers) state.troops.push({ prof: 0 });
+    while (state.troops.length < state.res.soldiers) state.troops.push({ prof: 0, seg: null }); // 新兵默认城内待命
     while (state.troops.length > state.res.soldiers) {
       let mi = 0;
       for (let i = 1; i < state.troops.length; i++) if (state.troops[i].prof < state.troops[mi].prof) mi = i;
@@ -165,6 +174,14 @@ function isOreSpot(r, c) {
 function cellAt(mx, my) {
   const c = Math.floor((mx - gridX0) / CELL), r = Math.floor((my - gridY0) / CELL);
   return (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS) ? { r: r, c: c } : null;
+}
+// 墙段命中（模块9）：墙体区间 [wallY-12, wallY+26] 等分 N 段，返回段下标或 null
+function wallSegAt(mx, my) {
+  const top = 56, bottom = H - 120;
+  const wallY = top + (bottom - top) * 0.42;
+  if (my < wallY - 12 || my > wallY + 26) return null;
+  const s = Math.floor(mx / (W / CONFIG.wall.segNames.length));
+  return (s >= 0 && s < CONFIG.wall.segNames.length) ? s : null;
 }
 // 建造校验：占地 / 矿点约束 / 资源，返回 {ok, reason}
 function canBuildAt(key, r, c) {
@@ -410,6 +427,61 @@ dailySettlers.push(function train(day) {
   });
 });
 
+// ============================ 城墙分段与布防（模块9，02 §4 塔防形态） ============================
+// 数据：state.troops[i].seg —— null=城内待命（未布防池），0~3=墙段下标；檑木按段计数存 state.segLogs[]。
+// 个体带 seg 布防：模块11 守城结算按段点名（战力=0.6+0.4×prof），不重建额外兵册。
+function troopsInSeg(s) {
+  const arr = [];
+  state.troops.forEach(function (t, i) { if (t.seg === s) arr.push(i); });
+  return arr;
+}
+function reserveTroops() { // 未布防池：seg===null 的兵下标
+  const arr = [];
+  state.troops.forEach(function (t, i) { if (t.seg === null || t.seg === undefined) arr.push(i); });
+  return arr;
+}
+// 单兵战力（模块11 锚点，02 重构实录）：prof 0~100 → 0.6~1.0
+function soldierPower(prof) { return CONFIG.profPowerBase + CONFIG.profPowerSpan * (prof / 100); }
+// 段战力 = 该段驻兵单兵战力之和（待原型验证，模块11 直接引用）
+function segPower(s) {
+  let p = 0;
+  state.troops.forEach(function (t) { if (t.seg === s) p += soldierPower(t.prof); });
+  return p;
+}
+// 驻兵上墙：从未布防池取 1 人（熟练度最高者优先——精兵顶前），写入 seg
+function deployTroop(s) {
+  const pool = reserveTroops();
+  if (!pool.length) { pushLog('无未布防兵可上墙'); return false; }
+  let bi = pool[0];
+  pool.forEach(function (i) { if (state.troops[i].prof > state.troops[bi].prof) bi = i; });
+  state.troops[bi].seg = s;
+  return true;
+}
+// 撤防回池：该段熟练度最低者先撤（留精兵守墙），seg 置 null
+function withdrawTroop(s) {
+  const seg = troopsInSeg(s);
+  if (!seg.length) return false;
+  let mi = seg[0];
+  seg.forEach(function (i) { if (state.troops[i].prof < state.troops[mi].prof) mi = i; });
+  state.troops[mi].seg = null;
+  return true;
+}
+// 檑木：每段独立计数（布防对象是工事不是兵；不升级，02 §2）
+function placeLog(s) {
+  const cost = CONFIG.wall.logCost;
+  if (state.segLogs[s] >= CONFIG.wall.logMaxPerSeg) { pushLog('该墙段檑木已满（' + CONFIG.wall.logMaxPerSeg + ' 座）'); return false; }
+  if (getRes('wood') < cost) { pushLog('檑木耗木 ' + cost + '，木头不足'); return false; }
+  addRes('wood', -cost);
+  state.segLogs[s] += 1;
+  return true;
+}
+function removeLog(s) {
+  if (!state.segLogs[s]) return false;
+  state.segLogs[s] -= 1;
+  addRes('wood', Math.floor(CONFIG.wall.logCost / 2));
+  return true;
+}
+
 function advanceClock(dtRealSec) {
   if (state.paused) return;
   const speed = CONFIG.speeds[state.speedIdx];
@@ -442,9 +514,13 @@ canvas.addEventListener('click', function (e) {
     }
   }
   const cell = cellAt(mx, my);
+  // 墙段命中优先（模块9）：点墙段 = 选中布防面板（盖过建筑选中，墙与网格区域不重叠）
+  const seg = wallSegAt(mx, my);
+  if (seg !== null) { state.selectedSeg = (state.selectedSeg === seg) ? null : seg; state.selected = null; return; }
   // 选中建筑（模块4）：点已有建筑永远打开岗位面板（含建造模式下，避免误触建造失败）
   if (cell && state.grid[cell.r][cell.c]) {
     state.selected = cell;
+    state.selectedSeg = null; // 与点墙段关建筑面板对称：点建筑关布防面板
     return;
   }
   // 空地（模块3）：建造模式下放置，否则取消选中
@@ -453,6 +529,7 @@ canvas.addEventListener('click', function (e) {
     return;
   }
   state.selected = null;
+  state.selectedSeg = null;
 });
 
 canvas.addEventListener('mousemove', function (e) {
@@ -586,7 +663,44 @@ function renderScene() {
   ctx.font = '15px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('关 外（敌来向）', W / 2, top + 36);
-  ctx.fillText('城 墙 防 线（模块9 分段布防接入）', W / 2, wallY + 48);
+
+  // 城墙分段（模块9）：等分 N 段，显示段名/驻兵/檑木/战力；点选命中见 wallSegAt()
+  const segs = CONFIG.wall.segNames;
+  const segW = W / segs.length;
+  for (let s = 0; s < segs.length; s++) {
+    const sx = s * segW;
+    // 段底色：选中提亮，有兵微绿、空段暗
+    const n = troopsInSeg(s).length;
+    if (state.selectedSeg === s) { ctx.fillStyle = 'rgba(232,200,96,0.18)'; ctx.fillRect(sx, wallY, segW, 26); }
+    else if (n > 0) { ctx.fillStyle = 'rgba(120,160,90,0.10)'; ctx.fillRect(sx, wallY, segW, 26); }
+    // 段分界虚线
+    if (s > 0) {
+      ctx.strokeStyle = '#6b5b38';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(sx + 0.5, wallY - 12); ctx.lineTo(sx + 0.5, wallY + 26); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // 段名（垛口上方）
+    ctx.fillStyle = '#c9bd9e';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText(segs[s], sx + segW / 2, wallY - 4);
+    // 驻兵与檑木（墙身上）：∅=无兵红字提示空防
+    ctx.font = '12px sans-serif';
+    if (n > 0) {
+      ctx.fillStyle = '#d8cdb2';
+      ctx.fillText('驻兵 ' + n, sx + segW / 2, wallY + 10);
+    } else {
+      ctx.fillStyle = '#ff8a7a';
+      ctx.fillText('∅ 无驻防', sx + segW / 2, wallY + 10);
+    }
+    // 檑木图标（垛口行，靠右排布，与段名不重叠）
+    if (state.segLogs[s] > 0) {
+      ctx.fillStyle = '#a8832e';
+      let lx = sx + segW - 14;
+      for (let i = 0; i < state.segLogs[s]; i++) { ctx.fillText('▤', lx, wallY - 4); lx -= 16; }
+    }
+  }
+  ctx.fillText('城 墙 防 线（点击墙段布防）', W / 2, wallY + 48);
 }
 
 // 经营区网格（模块3）
@@ -734,6 +848,43 @@ function renderBuildingPanel() {
     function () { assignWorker(b, +1); }, CONFIG.hardCapJobs && b.workers >= def.capacity || idlePop() <= 0);
 }
 
+// 布防面板（模块9）：选中墙段后右侧显示，+/- 驻兵与檑木，段战力实时可见（模块11 结算锚点）
+function renderSegPanel() {
+  if (state.selectedSeg === null) return;
+  const px = 1010, py = 258, pw = 230, ph = 150;
+  const s = state.selectedSeg;
+  const name = CONFIG.wall.segNames[s];
+  const seg = troopsInSeg(s);
+  ctx.fillStyle = '#221c14';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#4a3f2e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e8dcc0';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('【' + name + '】墙段布防', px + 12, py + 20);
+  ctx.font = '13px sans-serif';
+  // 段战力 = Σ(0.6+0.4×prof/100)，供模块11 直接引用（待原型验证）
+  const power = segPower(s);
+  const avg = seg.length ? seg.reduce(function (sum, i) { return sum + state.troops[i].prof; }, 0) / seg.length : 0;
+  ctx.fillStyle = seg.length ? '#c9bd9e' : '#ff8a7a';
+  ctx.fillText('驻兵：' + seg.length + ' 人 · 战力 ' + power.toFixed(2), px + 12, py + 42);
+  ctx.fillStyle = '#8a7c5e';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('均熟练 ' + Math.round(avg) + '% · 檑木 ' + state.segLogs[s] + '/' + CONFIG.wall.logMaxPerSeg, px + 12, py + 62);
+  ctx.fillText('未布防兵：' + reserveTroops().length + '（城内待命）', px + 12, py + 80);
+  // 三按钮并存（同军营面板教训：各占一位，禁用条件独立）
+  drawButton(px + 10, py + 96, 66, 24, '− 撤防', false, function () { withdrawTroop(s); }, seg.length <= 0);
+  drawButton(px + 80, py + 96, 66, 24, '+ 驻兵', false, function () { deployTroop(s); }, reserveTroops().length <= 0);
+  drawButton(px + 150, py + 96, 70, 24, state.segLogs[s] >= CONFIG.wall.logMaxPerSeg ? '檑木已满' : '+ 檑木', false,
+    function () { placeLog(s); }, state.segLogs[s] >= CONFIG.wall.logMaxPerSeg || getRes('wood') < CONFIG.wall.logCost);
+  // 撤除檑木：右键点墙段图标区不便无头测试，补一个小按钮（返还一半，同拆除惯例）
+  drawButton(px + 10, py + 124, 210, 20, '− 撤除檑木（返还 ' + Math.floor(CONFIG.wall.logCost / 2) + ' 木）', false,
+    function () { removeLog(s); }, state.segLogs[s] <= 0);
+}
+
 // 当日收支看板（模块16 HUD 打磨前的先行版）：让玩家看懂「为什么粮在掉」
 function renderLedger() {
   const px = 40, py = 70, pw = 200, ph = 178;
@@ -879,6 +1030,7 @@ function render() {
   renderPalette();
   renderLedger();
   renderBuildingPanel();
+  renderSegPanel();
   renderHUD();
   renderLog();
   renderPauseOverlay();

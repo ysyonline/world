@@ -192,7 +192,48 @@ console.assert(tryBuild('barracks', 1, 5) === false, 'RULE 已有军营，第二
 console.assert(canBuildAt('barracks', 1, 5).reason.indexOf('仅可设一座') >= 0, 'RULE 拒绝原因正确');
 console.assert(tryBuild('farm', 1, 5) === true, 'RULE 其他建筑不受军营限建影响');
 render();
-console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建)');
+
+// ---- 模块9：城墙分段 + 布防 ----
+// 准备：清场（全部撤防回池），造 3 兵熟练度 80/60/16 作布防对象
+state.troops.forEach(function (t) { t.seg = null; });
+setRes('soldiers', 3);
+state.troops[0].prof = 80; state.troops[0].seg = null; // 满训
+state.troops[1].prof = 60; state.troops[1].seg = null; // 中间档
+state.troops[2].prof = 16; state.troops[2].seg = null; // 仓促
+console.assert(reserveTroops().length === 3, 'M9 未布防池 3 人，got ' + reserveTroops().length);
+// 上墙：取熟练度最高者（80），seg 写入
+console.assert(deployTroop(0) === true, 'M9 甲段上墙');
+console.assert(troopsInSeg(0).some(i => state.troops[i].prof === 80), 'M9 高熟练先上墙');
+// 段战力公式：80% 兵 = 0.6+0.4×0.8 = 0.92
+console.assert(Math.abs(segPower(0) - 0.92) < 1e-9, 'M9 段战力 0.92，got ' + segPower(0));
+console.assert(deployTroop(0) === true && deployTroop(0) === true, 'M9 再上墙 2 人');
+console.assert(troopsInSeg(0).length === 3 && reserveTroops().length === 0, 'M9 池空段满 3 人');
+// 撤防：撤该段熟练度最低者（16 回池，80/60 留墙）
+console.assert(withdrawTroop(0) === true, 'M9 撤防');
+console.assert(!troopsInSeg(0).some(i => state.troops[i].prof === 16) && reserveTroops().some(i => state.troops[i].prof === 16), 'M9 低熟练先撤回池');
+console.assert(withdrawTroop(1) === false, 'M9 空段撤防拒绝');
+// 檑木：扣木、上限、返还一半（两次放置 20→15→10，撤除 +2 → 12）
+setRes('wood', 20);
+console.assert(placeLog(0) === true && getRes('wood') === 15 && state.segLogs[0] === 1, 'M9 檑木扣木 5');
+console.assert(placeLog(0) === true && placeLog(0) === false && state.segLogs[0] === 2, 'M9 檑木上限 2');
+console.assert(removeLog(0) === true && state.segLogs[0] === 1 && getRes('wood') === 12, 'M9 撤除返还一半，got ' + getRes('wood'));
+setRes('wood', 0);
+console.assert(placeLog(1) === false, 'M9 木不足拒放');
+// 墙段命中：墙体区间 y∈[wallY-12, wallY+26]（wallY≈284.5），横切 4 段
+console.assert(wallSegAt(100, 290) === 0 && wallSegAt(700, 290) === 2 && wallSegAt(700, 400) === null, 'M9 墙段命中检测');
+// 无兵可上墙拒绝
+setRes('soldiers', 0);
+console.assert(deployTroop(2) === false, 'M9 无兵拒上墙');
+// 面板渲染：选中墙段 → 三按钮 + 撤除檑木按钮注册，且不与建筑面板（py=70~246）重叠
+state.selectedSeg = 0; state.selected = null;
+setRes('soldiers', 2); state.troops[0].seg = 0; // 甲段留人，面板走有兵分支
+render();
+const segBtns = buttons.filter(b => ['− 撤防', '+ 驻兵', '+ 檑木', '− 撤除檑木'].indexOf(b.label) >= 0);
+console.assert(segBtns.length >= 3, 'M9 布防面板按钮注册，got ' + segBtns.length);
+console.assert(segBtns.every(b => b.y >= 258 && b.y + b.h <= 600), 'M9 布防面板不溢出、不压建筑面板');
+state.selectedSeg = null;
+render();
+console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防)');
 `;
 
 eval(code + test);
