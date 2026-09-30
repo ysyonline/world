@@ -287,7 +287,7 @@ render();
 state.paused = false;
 // 场景A：弓兵营+檑木（有普通营操作员，无近战）全歼 4 敌小股骚扰，零伤亡
 state.troops.forEach(function (t) { t.seg = null; });
-state.enemies = []; state.cityFallen = false; state.captives = 0; state.battleReport = null;
+state.enemies = []; state.cityFallen = false; state.captives = 0; state.pendingCaptives = 0; state.battleReport = null;
 state.gateHp = [CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp];
 setRes('soldiers', 0); setRes('grain', 500); setRes('money', 500); setRes('pop', 20);
 // 造兵：2 弓（80%）、1 普通营（80%）守甲段
@@ -301,7 +301,7 @@ const repA = resolveBattle(0, { siege: false, size: 4, day: state.day });
 console.assert(repA.kills === 4 && !repA.breached, 'M11-A 全歼 4 敌，got kills=' + repA.kills);
 console.assert(repA.captives === Math.ceil(4 * CONFIG.captiveRate), 'M11-A 俘虏 2 人');
 console.assert(repA.meleeDead === 0, 'M11-A 无近战参战，零伤亡');
-console.assert(state.captives === 2, 'M11-A 俘虏入账');
+console.assert(state.pendingCaptives === 2, 'M11-A 俘虏入待处置（模块12 接管），got ' + state.pendingCaptives);
 // 无近战堵门：残敌每轮砸门——第1轮 3 敌×2=6、第2轮 1 敌×2=2，共 8 伤（塔防竞速正确行为）
 console.assert(state.gateHp[0] === CONFIG.gateMaxHp - 8 && repA.gateDmg === 8, 'M11-A 无近战堵门门损 8，got ' + state.gateHp[0]);
 // 场景B：空防段（无兵无檑木）被 4 敌破门 → 抢粮杀民降声望
@@ -355,7 +355,45 @@ state.battleReport = repA; state.paused = true;
 render();
 console.assert(buttons.some(b => b.label === '关 闭'), 'M11 战报面板关闭按钮');
 render();
-console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防 + 模块10 波次 + 模块11 守城战)');
+
+// ---- 模块12：战后俘虏处置 ----
+state.paused = false; state.battleReport = null;
+state.pendingCaptives = 0; state.captives = 0;
+// 处决：每名 声望-2，整批，处决后恢复走日
+setRes('prestige', 50);
+state.pendingCaptives = 3;
+console.assert(executeCaptives() === true && state.pendingCaptives === 0 && getRes('prestige') === 44, 'M12 处决 3 俘虏声望 -6，got ' + getRes('prestige'));
+console.assert(state.paused === false, 'M12 处决后恢复走日');
+console.assert(executeCaptives() === false, 'M12 无待处置拒处决');
+console.assert(state.log.some(x => x.indexOf('【处置】') >= 0), 'M12 处决日志');
+// 关押：整批入押、保声望
+setRes('pop', 20); setRes('soldiers', 0); setRes('grain', 5000); setRes('money', 5000);
+state.pendingCaptives = 4;
+const presM12 = getRes('prestige');
+console.assert(imprisonCaptives() === true && state.captives === 4 && state.pendingCaptives === 0, 'M12 关押 4 俘虏入押');
+console.assert(getRes('prestige') === presM12, 'M12 关押不扣声望');
+// 处置面板：有待处置时出两按钮；无待处置不出
+state.pendingCaptives = 1; state.paused = true;
+render();
+console.assert(buttons.some(b => b.label === '全部处决') && buttons.some(b => b.label === '全部关押'), 'M12 处置面板两按钮');
+state.pendingCaptives = 0; state.paused = false;
+render();
+console.assert(!buttons.some(b => b.label === '全部处决'), 'M12 无待处置不出处置面板');
+// 逐日判定（种子随机确定性）：60 日内 4 名俘虏必然全部转化/逃跑；归化进平民不进兵
+const popM12 = getRes('pop'), solM12 = getRes('soldiers');
+let daysM12 = 0;
+while (state.captives > 0 && daysM12 < 60) { advanceClock(31); state.paused = false; daysM12++; }
+console.assert(state.captives === 0, 'M12 在押俘虏 ' + daysM12 + ' 日内全部转化/逃跑（种子确定性）');
+const convM12 = getRes('pop') - popM12;
+console.assert(convM12 >= 0 && convM12 <= 4, 'M12 归化平民 0~4 人，got ' + convM12);
+console.assert(getRes('soldiers') === solM12, 'M12 归化是平民不直接成兵');
+console.assert(state.log.some(x => x.indexOf('俘虏营') >= 0), 'M12 转化/逃跑日志');
+// 种子随机可复现：同种子同序列
+state.rngState = 42; const r1 = rand(), r2 = rand();
+state.rngState = 42;
+console.assert(rand() === r1 && rand() === r2, 'M12 种子随机可复现');
+render();
+console.log('ALL SMOKE PASSED (模块1~8 + 士气重构 + 军营限建 + 模块9 布防 + 模块10 波次 + 模块11 守城战 + 模块12 俘虏处置)');
 `;
 
 eval(code + test);

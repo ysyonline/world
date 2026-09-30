@@ -64,6 +64,10 @@
  *          敌总血池承伤（伤害跨轮累积）；骚扰 3 轮未破即退、总攻不死不休（10 轮兜底）；
  *          开战检溃：段均熟练<25% → 低熟练兵临阵脱逃；全歼→俘虏半数（模块12 处置）；
  *          骚扰破门→抢粮杀民降声望；总攻破门→城破标记（模块15 渲染）；战报弹面板+自动暂停。
+ *   模块12：战后俘虏处置（03 §4 最简版）——全歼→俘虏入待处置，战报关闭后弹处置面板（强制流程，
+ *          不选不能走日、空格不可绕过）；处决每名 声望-2；关押入押每日 转化20%→平民闲民（不直接成兵）
+ *          / 逃跑10%→消失；种子随机 mulberry32（rngState 存 state，结果可复现，回归可断言）；
+ *          HUD 显示在押数。无牢房不耗粮（切片裁定，正式版补）。
  *
  * 架构约定（供后续 16 个模块挂靠）：
  *   - CONFIG：全部数值占位集中于此，改参只动这里（切片验收标准 §7.4）；
@@ -128,6 +132,10 @@ const CONFIG = {
   siegeRounds: 10,      // 总攻轮次上限（不死不休，兜底防死循环）
   routProfFloor: 25,    // 开战检溃：段均熟练低于此值 → 低熟练兵临阵脱逃（锚 prof 低端）
   captiveRate: 0.5,     // 全歼敌时俘虏比例（向上取整，模块12 处置）
+  // 俘虏处置（模块12，03 §4 最简版：无牢房不耗粮；全占位待原型验证）
+  captiveKillPrestige: 2, // 处决：每名俘虏声望 -2
+  captiveConvertRate: 0.2, // 关押：每名俘虏每日转化率 → 归化为平民（进闲民池，不直接成兵）
+  captiveEscapeRate: 0.1,  // 关押：每名俘虏每日逃跑率 → 消失
   lootGrainPerEnemy: 5, // 骚扰破门：每残敌抢粮
   lootPopPerEnemy: 1,   // 骚扰破门：每残敌杀民
   lootPrestigeLoss: 3,  // 骚扰破门：声望损失
@@ -172,7 +180,9 @@ const state = {
   waveFired: {},          // 波次去重：波次下标 → true（每波只触发一次）
   // 守城战（模块11）：城门耐久累积（不自动恢复，修门花钱木）；战报驱动自动暂停
   gateHp: [CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp],
-  captives: 0,            // 在押俘虏（模块12 处置：杀/关押）
+  captives: 0,            // 在押俘虏（模块12：关押后逐日判定转化/逃跑）
+  pendingCaptives: 0,     // 待处置俘虏（模块12：战后弹处置面板，不选不能继续走日）
+  rngState: 20260930,     // 种子随机（模块12 用户裁定）：mulberry32，结果可复现，回归可断言
   battleReport: null,     // 最新战报（弹面板用，关闭后仍留档供复盘）
   cityFallen: false,      // 总攻破门 → 城破标记（模块15 渲染败局）
 };
@@ -676,7 +686,7 @@ function resolveBattle(seg, wave) {
   } else if (enemyAlive <= 0) {
     // 全歼：俘虏（模块12 处置）
     rep.captives = Math.ceil(wave.size * CONFIG.captiveRate);
-    state.captives += rep.captives;
+    state.pendingCaptives += rep.captives; // 模块12：待处置，战报关闭后弹处置面板
     state.enemies = state.enemies.filter(function (e) { return !(e.seg === seg && e.siege === wave.siege); });
   }
   // 击退（未全歼未破门）：敌留关外，下日续战（总攻）或退走（骚扰已在轮次内结算完）
@@ -729,6 +739,53 @@ dailySettlers.push(function battle(day) {
   if (sieges.length) {
     fightAndReport(sieges[0].seg, { siege: true, size: sieges.length, day: day });
   }
+});
+
+// ============================ 战后俘虏处置（模块12，03 §4 最简版） ============================
+// 流程：战斗全歼 → pendingCaptives 待处置 → 战报关闭后弹处置面板（不选不能继续走日）
+//   处决：每名 声望-2（省粮省事，长期人口流入受损）
+//   关押：入押 captives，每日逐个判定 转化20%→平民（进闲民池）/ 逃跑10%→消失
+// 种子随机（mulberry32）：rngState 存 state，每次运行结果可复现，无头回归可断言确定性。
+function rand() {
+  state.rngState |= 0;
+  state.rngState = (state.rngState + 0x6D2B79F5) | 0;
+  let t = Math.imul(state.rngState ^ (state.rngState >>> 15), 1 | state.rngState);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+function executeCaptives() { // 处决：整批，声望每名 -2
+  const n = state.pendingCaptives;
+  if (!n) return false;
+  addRes('prestige', -n * CONFIG.captiveKillPrestige);
+  state.pendingCaptives = 0;
+  state.paused = false;
+  pushLog('【处置】处决俘虏 ' + n + ' 人（声望 -' + (n * CONFIG.captiveKillPrestige) + '）');
+  return true;
+}
+function imprisonCaptives() { // 关押：整批入押，逐日赌转化/逃跑
+  const n = state.pendingCaptives;
+  if (!n) return false;
+  state.captives += n;
+  state.pendingCaptives = 0;
+  state.paused = false;
+  pushLog('【处置】关押俘虏 ' + n + ' 人（每日 ' + Math.round(CONFIG.captiveConvertRate * 100) + '% 归化 / ' + Math.round(CONFIG.captiveEscapeRate * 100) + '% 逃跑）');
+  return true;
+}
+// 在押俘虏逐日判定（日结）：转化→+1 平民闲民；逃跑→消失；都不中继续关押
+dailySettlers.push(function captivesDaily(day) {
+  if (state.captives <= 0) return;
+  let conv = 0, esc = 0;
+  for (let i = 0; i < state.captives; i++) {
+    const r = rand();
+    if (r < CONFIG.captiveConvertRate) conv++;
+    else if (r < CONFIG.captiveConvertRate + CONFIG.captiveEscapeRate) esc++;
+  }
+  state.captives -= conv + esc;
+  if (conv > 0) addRes('pop', conv); // 归化为平民进闲民池（要当兵须重新送训——03 待定点6 保守解）
+  const parts = [];
+  if (conv > 0) parts.push(conv + ' 人归化为平民');
+  if (esc > 0) parts.push(esc + ' 人趁夜逃跑');
+  if (parts.length) pushLog('俘虏营：' + parts.join('，') + '（在押余 ' + state.captives + '）');
 });
 
 function advanceClock(dtRealSec) {
@@ -812,6 +869,8 @@ window.addEventListener('keydown', function (e) {
 });
 
 function togglePause() {
+  // 战报/俘虏处置为强制流程（模块11/12）：面板未关不得用空格绕过
+  if (state.paused && (state.battleReport || state.pendingCaptives > 0)) return;
   state.paused = !state.paused;
   pushLog(state.paused ? '（暂停）' : '（继续）');
 }
@@ -869,6 +928,11 @@ function renderHUD() {
   } else {
     ctx.fillStyle = '#d95745';
     ctx.fillText('【战事已尽】（占位）', 340, 28);
+  }
+  // 在押俘虏（模块12）：有在押时显示，提醒玩家这是持续状态
+  if (state.captives > 0) {
+    ctx.fillStyle = '#c9a45c';
+    ctx.fillText('在押俘虏：' + state.captives, 500, 28);
   }
 
   // 资源面板（模块2 八项状态实时读出；模块16 再打磨视觉与预警灯）
@@ -1347,14 +1411,48 @@ function renderBattleReport() {
   lines.forEach(function (t, i) { ctx.fillText(t, px + 28, py + 66 + i * 24); });
   drawButton(px + pw / 2 - 60, py + ph - 42, 120, 28, '关 闭', false, function () {
     state.battleReport = null;
-    state.paused = false;
-    pushLog('（战报已阅，继续）');
+    if (state.pendingCaptives > 0) { // 模块12：有俘虏待处置 → 保持暂停，处置面板接管
+      pushLog('俘虏 ' + state.pendingCaptives + ' 人听候处置');
+    } else {
+      state.paused = false;
+      pushLog('（战报已阅，继续）');
+    }
   });
+}
+
+// 俘虏处置面板（模块12）：战报关闭且有待处置俘虏时弹出，不选不能继续走日
+function renderCaptivePanel() {
+  if (!state.paused || state.battleReport || state.pendingCaptives <= 0) return;
+  const n = state.pendingCaptives;
+  const pw = 440, ph = 210, px = (W - pw) / 2, py = 150;
+  ctx.fillStyle = 'rgba(10, 8, 6, 0.55)';
+  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillStyle = '#221c14';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#8a7648';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e8dcc0';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText('【俘虏处置】' + n + ' 名匈奴俘虏听候发落', px + pw / 2, py + 28);
+  ctx.textAlign = 'left';
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = '#c9bd9e';
+  ctx.fillText('处决：省粮省事，但每名声望 -' + CONFIG.captiveKillPrestige + '（人口流入受损）', px + 24, py + 60);
+  ctx.fillText('关押：保声望，每日 ' + Math.round(CONFIG.captiveConvertRate * 100) + '% 归化为平民 / '
+    + Math.round(CONFIG.captiveEscapeRate * 100) + '% 逃跑（不耗粮）', px + 24, py + 82);
+  ctx.fillStyle = '#8a7c5e';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('归化者进闲民池——要当兵须重新送训。整批二选一，选定即行。', px + 24, py + 104);
+  drawButton(px + 60, py + ph - 58, 140, 34, '全部处决', false, function () { executeCaptives(); });
+  drawButton(px + pw - 200, py + ph - 58, 140, 34, '全部关押', false, function () { imprisonCaptives(); });
 }
 
 // 暂停遮罩
 function renderPauseOverlay() {
-  if (!state.paused || state.battleReport) return; // 战报在时由战报面板自带遮罩
+  if (!state.paused || state.battleReport || state.pendingCaptives > 0) return; // 战报/处置面板自带遮罩
   ctx.fillStyle = 'rgba(10, 8, 6, 0.45)';
   ctx.fillRect(0, 56, W, H - 56 - 120);
   ctx.fillStyle = '#f2e3b6';
@@ -1376,6 +1474,7 @@ function render() {
   renderHUD();
   renderLog();
   renderBattleReport();
+  renderCaptivePanel();
   renderPauseOverlay();
 }
 
