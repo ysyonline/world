@@ -10,6 +10,58 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const buttons = [];
+// ============================ 相机（08 §6 第 2 步：同一地图承载两级视角） ============================
+// 世界坐标 ↔ 屏幕坐标的唯一换算口；经营/骚扰固定全景档，总攻推战斗档（第 3 步接入触发）。
+const VIEW = CONFIG.view; // MAP（世界几何）由 sim.js 声明，渲染层复用：几何是逻辑概念，两边必须同源
+const camera = { x: MAP.worldW / 2, y: MAP.worldH / 2, zoom: 1, mode: 'overview', focusSeg: 0 };
+function fitZoom() { return Math.min(VIEW.w / MAP.worldW, VIEW.h / MAP.worldH); }
+function setCamera(mode, focusSeg) {
+  camera.mode = mode;
+  if (mode === 'battle') {
+    camera.focusSeg = focusSeg === undefined ? 0 : focusSeg;
+    camera.zoom = CONFIG.camera.battleZoom;
+    const g = MAP.segs[camera.focusSeg];
+    const wallY = g.side === 'north' ? MAP.city.y : MAP.city.y + MAP.city.h;
+    camera.x = MAP.city.x + MAP.city.w / 2;
+    camera.y = wallY + (g.side === 'north' ? -55 : 55); // 同屏装下 门+门侧墙+近郊接战区
+  } else {
+    camera.zoom = fitZoom();
+    camera.x = MAP.worldW / 2;
+    camera.y = MAP.worldH / 2;
+  }
+}
+setCamera('overview');
+function worldToScreen(wx, wy) {
+  return { x: VIEW.x + VIEW.w / 2 + (wx - camera.x) * camera.zoom,
+    y: VIEW.y + VIEW.h / 2 + (wy - camera.y) * camera.zoom };
+}
+function screenToWorld(sx, sy) {
+  return { x: camera.x + (sx - VIEW.x - VIEW.w / 2) / camera.zoom,
+    y: camera.y + (sy - VIEW.y - VIEW.h / 2) / camera.zoom };
+}
+function inView(sx, sy) { return sx >= VIEW.x && sx <= VIEW.x + VIEW.w && sy >= VIEW.y && sy <= VIEW.y + VIEW.h; }
+function drawWorld(fn) { // 世界层：裁剪到视口 + 应用相机变换
+  ctx.save();
+  ctx.beginPath(); ctx.rect(VIEW.x, VIEW.y, VIEW.w, VIEW.h); ctx.clip();
+  ctx.translate(VIEW.x + VIEW.w / 2, VIEW.y + VIEW.h / 2);
+  ctx.scale(camera.zoom, camera.zoom);
+  ctx.translate(-camera.x, -camera.y);
+  fn();
+  ctx.restore();
+}
+// 世界层里的文字：临时回屏幕坐标绘制，保证任意 zoom 下字号恒定可读（缩放文字会糊）
+function worldText(txt, wx, wy, fontPx, color, align) {
+  const p = worldToScreen(wx, wy);
+  if (!inView(p.x, p.y)) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = (fontPx || 12) + 'px sans-serif';
+  ctx.fillStyle = color || '#c9bd9e';
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(txt, p.x, p.y);
+  ctx.restore();
+}
 // ============================ 绘制工具 ============================
 function drawButton(x, y, w, h, label, active, action, disabled) {
   buttons.push({ x: x, y: y, w: w, h: h, label: label, action: disabled ? function () {} : action });
@@ -175,209 +227,218 @@ function renderLedger() {
   ctx.fillText(diag || '各资源收支健康（预估口径）', x + 12, y + 4);
 }
 
-// ============================ 场景（迷雾带 / 城外 / 城墙 / 关内） ============================
+// ============================ 场景（合图世界层：迷雾 / 天险 / 接战区 / 城外 / 城墙 / 关内） ============================
+// 08 §6 第 2 步：一张真地图承载两级视角。几何全部来自 CONFIG.map，绘制一律走世界坐标；
+// 文字走 worldText（回屏幕坐标绘制），保证全景档和战斗档下字号恒定不糊。
 function renderScene() {
-  const wallY = 300;
+  const OG = CONFIG.outGrid, C = MAP.city, T = MAP.wallThick;
   const t = state.dayProgress;
   const sky = 22 + Math.round(12 * Math.sin(t * Math.PI));
-  // 迷雾带（56~120）：可见范围=主城+城外田区+烽燧半径，往外即迷雾（01 §7）
-  ctx.fillStyle = '#101418';
-  ctx.fillRect(0, 56, W, 64);
-  // 烽燧视野：每座烽燧驱散一团迷雾（视觉）
-  eachBuilding(function (b, zone, r, c) {
-    if (b.type !== 'beacon') return;
-    const bx = OUT.x0 + c * OUT.cell + OUT.cell / 2;
-    ctx.fillStyle = 'rgba(60,72,60,0.55)';
-    ctx.beginPath(); ctx.arc(bx, 88, 90, 0, Math.PI * 2); ctx.fill();
-  });
-  ctx.fillStyle = '#5a6a72';
-  ctx.font = '13px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('迷 雾（敌来向 · 商人进货去向 · 烽燧可驱散）', W / 2, 70);
-  // 驿站（固有设施标记，城外右端）
-  ctx.fillStyle = '#6b5b38';
-  ctx.fillRect(W - 130, 96, 100, 22);
-  ctx.strokeStyle = '#8a7648';
-  ctx.strokeRect(W - 130 + 0.5, 96.5, 99, 21);
-  ctx.fillStyle = state.curfewPolicy === 'closed' ? '#e0c060' : '#c9bd9e';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('驿站' + (state.curfewPolicy === 'closed' ? '（商队夜宿）' : ''), W - 80, 107);
-  // 敌情标记
-  if (state.enemies.length) {
-    const hasSiege = state.enemies.some(function (e) { return e.siege; });
-    state.enemies.forEach(function (e) {
-      const cx = e.seg === null ? W / 2 : (e.seg + 0.5) * (W / CONFIG.wall.segNames.length);
-      ctx.font = 'bold 14px sans-serif';
-      ctx.fillStyle = e.siege ? '#d95745' : '#c98a4a';
-      ctx.fillText((e.siege ? '⚔总攻×' : '🏹游骑×') + e.n, cx, 100);
+  const backH = OG.splitRow * OG.cell, frontH = (OG.rows - OG.splitRow) * OG.cell;
+  drawWorld(function () {
+    // 图外暗区 / 世界底色（迷雾）：地图 700×722 是竖长的，视口 1000×584 是宽扁的，
+    // fit 后两侧必然留白 —— 底色必须铺到视口边界，左右深涧也一并延伸出画面（看起来是崖外，不是空洞）
+    const tl = screenToWorld(VIEW.x, VIEW.y), br = screenToWorld(VIEW.x + VIEW.w, VIEW.y + VIEW.h);
+    ctx.fillStyle = '#101418';
+    ctx.fillRect(tl.x - 20, tl.y - 20, (br.x - tl.x) + 40, (br.y - tl.y) + 40);
+    // 烽燧驱雾（视觉，01 §7）
+    eachBuilding(function (b, zone, r, c) {
+      if (b.type !== 'beacon') return;
+      const p = cellCenter(zone, r, c);
+      ctx.fillStyle = 'rgba(60,72,60,0.45)';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 74, 0, Math.PI * 2); ctx.fill();
     });
-    if (hasSiege) {
-      ctx.font = 'bold 13px sans-serif';
-      ctx.fillStyle = '#d95745';
-      ctx.fillText('—— 总攻进行中 ——', W / 2, 86);
+    // 近郊接战区（南北）：敌集结与我军出城拆除器械的战场
+    ctx.fillStyle = 'rgb(' + (sky + 12) + ',' + (sky + 6) + ',' + (sky + 2) + ')';
+    ctx.fillRect(0, MAP.fog, MAP.worldW, MAP.battle);
+    ctx.fillRect(0, MAP.worldH - MAP.fog - MAP.battle, MAP.worldW, MAP.battle);
+    // 城外产业区（后郊 / 前郊）
+    ctx.fillStyle = 'rgb(' + (sky + 8) + ',' + (sky + 14) + ',' + (sky + 4) + ')';
+    ctx.fillRect(0, OG.y0North, MAP.worldW, backH);
+    ctx.fillRect(0, OG.y0South, MAP.worldW, frontH);
+    // 关内地面
+    ctx.fillStyle = '#2c2618';
+    ctx.fillRect(C.x, C.y, C.w, C.h);
+    // 左右天险（深涧：不可建造 / 不可进攻 / 不可布防，08 §3 侧翼天险）
+    ctx.fillStyle = '#15181c';
+    ctx.fillRect(tl.x - 20, 0, (MAP.cliffW - tl.x) + 20, MAP.worldH);
+    ctx.fillRect(MAP.worldW - MAP.cliffW, 0, (br.x + 20) - (MAP.worldW - MAP.cliffW), MAP.worldH);
+    ctx.strokeStyle = '#333c44'; ctx.lineWidth = 1;
+    for (let y = 0; y < MAP.worldH; y += 20) {
+      ctx.beginPath(); ctx.moveTo(6, y); ctx.lineTo(MAP.cliffW - 6, y + 12); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(MAP.worldW - 6, y); ctx.lineTo(MAP.worldW - MAP.cliffW + 6, y + 12); ctx.stroke();
     }
-  }
-  // 城外田区底色（120~288）
-  ctx.fillStyle = 'rgb(' + (sky + 8) + ',' + (sky + 14) + ',' + (sky + 4) + ')';
-  ctx.fillRect(0, 120, W, 168);
-  ctx.fillStyle = '#6b5f47';
-  ctx.font = '13px sans-serif';
-  ctx.fillText('城 外 田 区（农/林/矿 · 产出先积产地，工人自运回城 · 可被袭扰）', W / 2, 130);
-  if (state.recalled) {
-    ctx.fillStyle = '#c9a45c';
-    ctx.fillText('【收保中】城外平民已撤回（停产）', W / 2, 280);
-  }
-  // 城墙（288~326）
-  ctx.fillStyle = '#3d362a';
-  ctx.fillRect(0, wallY - 12, W, 38);
-  ctx.fillStyle = '#4a4234';
-  for (let x = 0; x < W; x += 46) ctx.fillRect(x + 4, wallY - 22, 30, 12);
-  // 墙段
-  const segs = CONFIG.wall.segNames;
-  const segW = W / segs.length;
-  for (let s = 0; s < segs.length; s++) {
-    const sx = s * segW;
-    const n = troopsInSeg(s).length;
-    if (state.selectedSeg === s) { ctx.fillStyle = 'rgba(232,200,96,0.18)'; ctx.fillRect(sx, wallY - 12, segW, 38); }
-    else if (n > 0) { ctx.fillStyle = 'rgba(120,160,90,0.10)'; ctx.fillRect(sx, wallY - 12, segW, 38); }
-    if (s > 0) {
-      ctx.strokeStyle = '#6b5b38';
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(sx + 0.5, wallY - 22); ctx.lineTo(sx + 0.5, wallY + 26); ctx.stroke();
+    // 城墙（南北两道；左右依天险不设墙）
+    ctx.fillStyle = '#3d362a';
+    ctx.fillRect(C.x - 8, C.y - T, C.w + 16, T);
+    ctx.fillRect(C.x - 8, C.y + C.h, C.w + 16, T);
+    ctx.fillStyle = '#4a4234';
+    for (let x = C.x - 8; x < C.x + C.w; x += 46) {
+      ctx.fillRect(x + 4, C.y - T - 7, 30, 7);
+      ctx.fillRect(x + 4, C.y + C.h + T, 30, 7);
+    }
+    // 四段布防（前门 / 前侧墙 / 后门 / 后侧墙）：实线=门，虚线=云梯可攀
+    for (let s = 0; s < MAP.segs.length; s++) {
+      const r = segRect(s), g = MAP.segs[s];
+      const n = troopsInSeg(s).length;
+      if (state.selectedSeg === s) { ctx.fillStyle = 'rgba(232,200,96,0.28)'; ctx.fillRect(r.x, r.y, r.w, r.h); }
+      else if (n > 0) { ctx.fillStyle = 'rgba(120,160,90,0.16)'; ctx.fillRect(r.x, r.y, r.w, r.h); }
+      ctx.strokeStyle = g.climb ? '#c9752e' : '#8a7648';
+      ctx.lineWidth = 1;
+      ctx.setLineDash(g.climb ? [5, 3] : []);
+      ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
       ctx.setLineDash([]);
+      const gh = state.gateHp[s], gm = CONFIG.gateMaxHp;
+      ctx.fillStyle = '#17130e';
+      ctx.fillRect(r.x + 1, r.y + r.h - 5, r.w - 2, 3);
+      ctx.fillStyle = gh <= 3 ? '#d95745' : (gh < gm ? '#efb63c' : '#8fae66');
+      ctx.fillRect(r.x + 1, r.y + r.h - 5, (r.w - 2) * (gh / gm), 3);
     }
-    ctx.fillStyle = '#c9bd9e';
-    ctx.font = 'bold 13px sans-serif';
-    ctx.fillText(segs[s], sx + segW / 2, wallY - 14);
-    ctx.font = '11px sans-serif';
-    if (n > 0) {
-      const nm = state.troops.filter(function (t) { return t.seg === s && t.type === 'melee'; }).length;
-      const na = state.troops.filter(function (t) { return t.seg === s && t.type === 'archer'; }).length;
-      const ne = state.troops.filter(function (t) { return t.seg === s && t.type === 'engineer'; }).length;
-      ctx.fillStyle = '#d8cdb2';
-      ctx.fillText('步' + nm + '弓' + na + '工' + ne, sx + segW / 2, wallY + 2);
-    } else {
-      ctx.fillStyle = '#ff8a7a';
-      ctx.fillText('∅ 无驻防', sx + segW / 2, wallY + 2);
-    }
-    // 城门血点
-    const gh = state.gateHp[s];
-    for (let g = 0; g < CONFIG.gateMaxHp; g++) {
-      ctx.fillStyle = g < gh ? '#8fae66' : '#3a3226';
-      ctx.fillRect(sx + 8 + g * 8, wallY + 10, 6, 4);
-    }
-    // 器械图标
-    ctx.fillStyle = '#a8832e';
-    let lx = sx + segW - 14;
-    for (let i = 0; i < state.segLogs[s]; i++) { ctx.fillText('▤', lx, wallY - 14); lx -= 13; }
-    ctx.fillStyle = '#c9752e';
-    for (let i = 0; i < state.segOil[s]; i++) { ctx.fillText('◉', lx, wallY - 14); lx -= 13; }
-    ctx.fillStyle = '#8a9ab0';
-    for (let i = 0; i < state.segXbow[s]; i++) { ctx.fillText('☩', lx, wallY - 14); lx -= 13; }
-  }
-  ctx.fillStyle = '#6b5f47';
-  ctx.font = '13px sans-serif';
-  ctx.fillText('城 墙 防 线（点击墙段布防）', W / 2, wallY + 34);
-  // 关内地面
-  ctx.fillStyle = '#2c2618';
-  ctx.fillRect(0, 336, W, 600 - 336);
-  ctx.fillStyle = '#6b5f47';
-  ctx.fillText('关 内（工匠坊/兵营/市坊/粮仓/货仓/民房）', W / 2, 344);
-  // walker 绘制（v0.3）：背货=小点+物资色包裹；收保撤离=空手小点；职业着色
-  state.walkers.forEach(function (w) {
-    ctx.fillStyle = w.color;
-    ctx.beginPath();
-    ctx.arc(w.x, w.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-    if (w.kind === 'carry') { // 包裹：货物主色画头顶小方块
-      const k0 = Object.keys(w.cargo)[0];
-      const resColor = { grain: '#d8b83c', wood: '#8a6a3a', soil: '#a5785a', iron: '#8a9ab0' };
-      ctx.fillStyle = resColor[k0] || '#d8b83c';
-      ctx.fillRect(w.x - 3, w.y - 10, 6, 5);
-    }
+    // walker（背货 / 收保撤离）：半径按 zoom 反算，保证屏幕尺寸恒定
+    const wr = 4 / camera.zoom;
+    state.walkers.forEach(function (w) {
+      ctx.fillStyle = w.color;
+      ctx.beginPath(); ctx.arc(w.x, w.y, wr, 0, Math.PI * 2); ctx.fill();
+      if (w.kind === 'carry') {
+        const k0 = Object.keys(w.cargo)[0];
+        const resColor = { grain: '#d8b83c', wood: '#8a6a3a', soil: '#a5785a', iron: '#8a9ab0' };
+        ctx.fillStyle = resColor[k0] || '#d8b83c';
+        ctx.fillRect(w.x - wr, w.y - wr * 2.6, wr * 2, wr * 1.3);
+      }
+    });
   });
+  // ---- 文字层（屏幕坐标，字号恒定）----
+  const ccx = C.x + C.w / 2;
+  worldText('迷 雾（敌来向 · 商人进货去向 · 烽燧可驱散）', MAP.worldW / 2, MAP.fog / 2, 12, '#5a6a72');
+  worldText('迷 雾', MAP.worldW / 2, MAP.worldH - MAP.fog / 2, 12, '#5a6a72');
+  worldText('近郊接战区', MAP.worldW / 2, MAP.fog + 14, 11, '#9a7f66');
+  worldText('近郊接战区', MAP.worldW / 2, MAP.worldH - MAP.fog - 14, 11, '#9a7f66');
+  worldText('后郊产业区（农/林/矿 · 产出先积产地，工人自运回城 · 可被袭扰）', MAP.worldW / 2, OG.y0North - 10, 12, '#6b7f47');
+  worldText('前郊产业区（直面正门方向 · 粮道即敌来向）', MAP.worldW / 2, OG.y0South + (OG.rows - OG.splitRow) * OG.cell + 12, 12, '#6b7f47');
+  worldText('关 内（工匠坊/兵营/市坊/粮仓/货仓/民房）', ccx, C.y + C.h - 5, 10, '#6b5f47');
+  worldText('深涧·天险', MAP.cliffW / 2, MAP.worldH / 2, 12, '#6b7a86');
+  worldText('深涧·天险', MAP.worldW - MAP.cliffW / 2, MAP.worldH / 2, 12, '#6b7a86');
+  for (let s = 0; s < MAP.segs.length; s++) {
+    const r = segRect(s), n = troopsInSeg(s).length;
+    worldText(MAP.segs[s].name + (n > 0 ? '×' + n : ' ∅'), r.x + r.w / 2, r.y + r.h / 2 - 4, 11, n > 0 ? '#f2e3b6' : '#ff8a7a');
+    if (n > 0) {
+      const nm = state.troops.filter(function (x) { return x.seg === s && x.type === 'melee'; }).length;
+      const na = state.troops.filter(function (x) { return x.seg === s && x.type === 'archer'; }).length;
+      const ne = state.troops.filter(function (x) { return x.seg === s && x.type === 'engineer'; }).length;
+      worldText('步' + nm + '弓' + na + '工' + ne, r.x + r.w / 2, r.y + r.h / 2 + 10, 10, '#d8cdb2');
+    }
+  }
+  // 驿站（城外固有设施：常闭→商队夜宿，次日商税 ×0.5）
+  const innP = worldToScreen(MAP.worldW - MAP.cliffW - 46, MAP.worldH - MAP.fog - MAP.battle / 2);
+  if (inView(innP.x, innP.y)) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#6b5b38'; ctx.fillRect(innP.x - 42, innP.y - 11, 84, 22);
+    ctx.strokeStyle = '#8a7648'; ctx.lineWidth = 1; ctx.strokeRect(innP.x - 41.5, innP.y - 10.5, 83, 21);
+    ctx.fillStyle = state.curfewPolicy === 'closed' ? '#e0c060' : '#c9bd9e';
+    ctx.font = '12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('驿站' + (state.curfewPolicy === 'closed' ? '（宿）' : ''), innP.x, innP.y);
+    ctx.restore();
+  }
+  // 敌情标记（按段所在侧的接战区呈现）
+  if (state.enemies.length) {
+    state.enemies.forEach(function (e) {
+      const g = MAP.segs[e.seg === null ? 0 : e.seg];
+      const y = g.side === 'north' ? MAP.fog + MAP.battle / 2 : MAP.worldH - MAP.fog - MAP.battle / 2;
+      worldText((e.siege ? '总攻×' : '游骑×') + e.n, g.x + g.w / 2, y, 14, e.siege ? '#d95745' : '#c98a4a');
+    });
+    if (state.enemies.some(function (e) { return e.siege; })) {
+      worldText('—— 总攻进行中 ——', MAP.worldW / 2, MAP.fog + MAP.battle - 12, 13, '#d95745');
+    }
+  }
+  if (state.recalled) {
+    worldText('【收保中】城外平民已撤回（停产）', ccx, OG.y0North + backH - 12, 12, '#c9a45c');
+  }
 }
 function renderGridZone(zone) {
   const cfg = cfgOf(zone), g = gridOf(zone);
   const colors = { farm: '#6a8f3c', lumber: '#7a5a33', mine: '#5a5a66', beacon: '#8a7a3a',
     granary: '#7a6a42', depot: '#6a6a52', house: '#8a7448', workshop: '#8a4a3a', barracks: '#4a5a7a', market: '#3a6a62' };
+  drawWorld(function () {
+    for (let r = 0; r < cfg.rows; r++) {
+      for (let c = 0; c < cfg.cols; c++) {
+        const x = cfg.x0 + c * cfg.cell, y = zone === 'out' ? outRowY0(r) : cfg.y0 + r * cfg.cell;
+        const b = g[r][c];
+        ctx.fillStyle = zone === 'out' ? '#33301f' : '#332d1f';
+        ctx.fillRect(x, y, cfg.cell, cfg.cell);
+        if (state.buildMode && state.hoverCell && state.hoverCell.zone === zone && state.hoverCell.r === r && state.hoverCell.c === c) {
+          ctx.fillStyle = canBuildAt(state.buildMode, zone, r, c).ok ? 'rgba(120,200,90,0.35)' : 'rgba(210,80,60,0.35)';
+          ctx.fillRect(x, y, cfg.cell, cfg.cell);
+        }
+        ctx.strokeStyle = '#4a4234';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, cfg.cell - 1, cfg.cell - 1);
+        if (state.selected && state.selected.zone === zone && state.selected.r === r && state.selected.c === c) {
+          ctx.strokeStyle = '#e8c860';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 1.5, y + 1.5, cfg.cell - 3, cfg.cell - 3);
+        }
+        if (b) { ctx.fillStyle = colors[b.type]; ctx.fillRect(x + 3, y + 3, cfg.cell - 6, cfg.cell - 6); }
+      }
+    }
+  });
+  // 建筑标签（屏幕坐标，字号恒定；格子屏幕约 40px，三行排布）
   for (let r = 0; r < cfg.rows; r++) {
     for (let c = 0; c < cfg.cols; c++) {
-      const x = cfg.x0 + c * cfg.cell, y = cfg.y0 + r * cfg.cell;
       const b = g[r][c];
-      ctx.fillStyle = zone === 'out' ? '#33301f' : '#332d1f';
-      ctx.fillRect(x, y, cfg.cell, cfg.cell);
-      if (state.buildMode && state.hoverCell && state.hoverCell.zone === zone && state.hoverCell.r === r && state.hoverCell.c === c) {
-        ctx.fillStyle = canBuildAt(state.buildMode, zone, r, c).ok ? 'rgba(120,200,90,0.35)' : 'rgba(210,80,60,0.35)';
-        ctx.fillRect(x, y, cfg.cell, cfg.cell);
+      if (!b) continue;
+      const x = cfg.x0 + c * cfg.cell, y = zone === 'out' ? outRowY0(r) : cfg.y0 + r * cfg.cell;
+      const mx = x + cfg.cell / 2, my = y + cfg.cell / 2;
+      worldText(CONFIG.buildings[b.type].label, mx, my - 9, 11, '#f2e3b6');
+      const cap = CONFIG.buildings[b.type].capacity;
+      const capShow = b.type === 'barracks' ? cap * 3 : cap; // v0.3.1 分营：兵营显示总席位=三营之和
+      if (cap > 0) {
+        worldText((b.type === 'barracks' ? '训' : '人') + b.workers + '/' + capShow, mx, my + 2, 10,
+          b.workers > capShow ? '#ff8a7a' : '#d8cdb2');
       }
-      ctx.strokeStyle = '#4a4234';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, cfg.cell - 1, cfg.cell - 1);
-      if (state.selected && state.selected.zone === zone && state.selected.r === r && state.selected.c === c) {
-        ctx.strokeStyle = '#e8c860';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x + 1.5, y + 1.5, cfg.cell - 3, cfg.cell - 3);
-      }
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      if (b) {
-        ctx.fillStyle = colors[b.type];
-        ctx.fillRect(x + 3, y + 3, cfg.cell - 6, cfg.cell - 6);
-        ctx.fillStyle = '#f2e3b6';
-        ctx.font = (zone === 'out' ? 11 : 12) + 'px sans-serif';
-        ctx.fillText(CONFIG.buildings[b.type].label, x + cfg.cell / 2, y + cfg.cell / 2 - 8);
-        const cap = CONFIG.buildings[b.type].capacity;
-        const capShow = b.type === 'barracks' ? cap * 3 : cap; // v0.3.1 分营：兵营显示总席位=三营之和
-        ctx.fillStyle = b.workers > capShow ? '#ff8a7a' : '#d8cdb2';
-        ctx.font = '10px sans-serif';
-        if (cap > 0) ctx.fillText((b.type === 'barracks' ? '训' : '人') + b.workers + '/' + capShow, x + cfg.cell / 2, y + cfg.cell / 2 + 8); // 兵营显示「训」=在训学员席（训毕离营编入部队）
-        // 城外产地「待运」角标（v0.3：攒够 5 担自动有人背回）
-        if (zone === 'out' && b.stock) {
-          const s = Object.keys(b.stock).reduce(function (sum, k) { return sum + b.stock[k]; }, 0);
-          if (s >= 1) {
-            ctx.fillStyle = s >= CONFIG.carryLoad ? '#efb63c' : '#9a8f6e';
-            ctx.font = '10px sans-serif';
-            ctx.fillText('待运' + Math.floor(s), x + cfg.cell / 2, y + cfg.cell - 8);
-          }
-        }
+      if (zone === 'out' && b.stock) { // 城外产地「待运」角标
+        const s = Object.keys(b.stock).reduce(function (sum, k) { return sum + b.stock[k]; }, 0);
+        if (s >= 1) worldText('待运' + Math.floor(s), mx, my + 13, 10, s >= CONFIG.carryLoad ? '#efb63c' : '#9a8f6e');
       }
     }
   }
 }
 
-// ============================ 建造面板（左栏） ============================
+// ============================ 建造面板（右栏 · 08 §6 第 2 步：地图铺满视口，面板不再压地图） ============================
 function renderPalette() {
-  const px = 14, pw = 150;
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  let y = 66;
-  const groups = [['建 造 · 城 外', ['farm', 'lumber', 'mine', 'beacon']], ['建 造 · 关 内', ['house', 'granary', 'depot', 'workshop', 'barracks', 'market']]];
+  const px = 1010, colW = 122; // 右栏常驻 280px，建造菜单两列排布省纵向空间
+  let y = 72;
+  const groups = [['建 造 · 城 外（前后郊）', ['farm', 'lumber', 'mine', 'beacon']], ['建 造 · 关 内', ['house', 'granary', 'depot', 'workshop', 'barracks', 'market']]];
   groups.forEach(function (grp) {
     ctx.fillStyle = '#8a7c5e';
-    ctx.font = 'bold 14px sans-serif';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
     ctx.fillText(grp[0], px, y);
-    y += 20;
-    grp[1].forEach(function (key) {
+    y += 18;
+    grp[1].forEach(function (key, i) {
       const def = CONFIG.buildings[key];
-      drawButton(px, y, pw, 24, def.label, state.buildMode === key, function () {
+      const cx = px + (i % 2) * (colW + 4), cy = y + Math.floor(i / 2) * 34;
+      drawButton(cx, cy, colW, 24, def.label, state.buildMode === key, function () {
         state.buildMode = (state.buildMode === key) ? null : key;
       });
       ctx.fillStyle = '#7a6f58';
-      ctx.font = '11px sans-serif';
-      ctx.fillText(costStr(def.cost), px + 4, y + 33);
-      y += 42;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(costStr(def.cost), cx + 5, cy + 31);
     });
-    y += 4;
+    y += Math.ceil(grp[1].length / 2) * 34 + 22;
   });
-  // 收保按钮
-  drawButton(px, y, pw, 26, state.recalled ? '▶ 复工（回城外）' : '⛨ 收保（撤平民）', state.recalled, toggleRecall);
+  drawButton(px, y, 248, 26, state.recalled ? '▶ 复工（回城外）' : '⛨ 收保（撤平民）', state.recalled, toggleRecall);
   y += 34;
   ctx.fillStyle = '#7a6f58';
   ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
   if (state.buildMode) {
     ctx.fillStyle = '#e8dcc0';
-    const zoneTxt = CONFIG.buildings[state.buildMode].zone === 'out' ? '城外田区' : '关内';
+    const zoneTxt = CONFIG.buildings[state.buildMode].zone === 'out' ? '城外前后郊' : '关内';
     ctx.fillText('放置到' + zoneTxt + '，右键/Esc 取消', px, y);
   } else {
     ctx.fillText('右键点建筑=拆除（返还一半）', px, y);
@@ -385,7 +446,7 @@ function renderPalette() {
 }
 // 运输线列表（v0.3：一条线=一个产地→对应仓库；脚夫废除）
 function renderTransport() {
-  const px = 1010, py = 316, pw = 256, ph = 126; // v0.3.1：原位(14,470)盖住建菜单兵营/市坊按钮——搬右栏空区
+  const px = 1010, py = 348, pw = 256, ph = 96; // 右栏中部：建造菜单之下、信息面板（y452）之上
   panel(px, py, pw, ph, '运 输 线');
   ctx.font = '11px sans-serif';
   ctx.textAlign = 'left';
@@ -409,18 +470,18 @@ function renderTransport() {
     ctx.fillStyle = '#8a7c5e';
     ctx.fillText('城外暂无产线（建农田/伐木场/矿洞）', px + 10, y + 6);
   } else {
-    lines.slice(0, 6).forEach(function (t) {
+    lines.slice(0, 4).forEach(function (t) {
       ctx.fillStyle = t.indexOf('待运') >= 0 ? '#c9a45c' : '#9a9282';
       ctx.fillText(t, px + 10, y);
       y += 15;
     });
-    if (lines.length > 6) { ctx.fillStyle = '#8a7c5e'; ctx.fillText('…共 ' + lines.length + ' 条线', px + 10, y); }
+    if (lines.length > 4) { ctx.fillStyle = '#8a7c5e'; ctx.fillText('…共 ' + lines.length + ' 条线', px + 10, y); }
   }
 }
 
 // ============================ 建筑面板（右栏） ============================
 function renderBuildingPanel() {
-  const px = 1010, py = 70, pw = 256, ph = 240;
+  const px = 1010, py = 452, pw = 256, ph = 240;
   if (!state.selected) {
     panel(px, py, pw, 110, '城 市 概 览');
     ctx.font = '12px sans-serif';
@@ -549,7 +610,7 @@ function renderBuildingPanel() {
 // ============================ 布防面板（右栏下） ============================
 function renderSegPanel() {
   if (state.selectedSeg === null) return;
-  const px = 1010, py = 322, pw = 256, ph = 274;
+  const px = 1010, py = 452, pw = 256, ph = 264;
   const s = state.selectedSeg;
   const name = CONFIG.wall.segNames[s];
   const seg = troopsInSeg(s);
@@ -603,9 +664,9 @@ function renderSegPanel() {
 
 // ============================ 日志 / 弹窗 ============================
 function renderLog() {
-  const y0 = H - 120;
+  const y0 = H - CONFIG.view.logH;
   ctx.fillStyle = '#1a1510';
-  ctx.fillRect(0, y0, W, 120);
+  ctx.fillRect(0, y0, W, CONFIG.view.logH);
   ctx.strokeStyle = '#4a3f2e';
   ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(W, y0 + 0.5); ctx.stroke();
   ctx.textAlign = 'left';
@@ -621,7 +682,7 @@ function renderBattleReport() {
   if (!rep || !state.paused) return;
   const pw = 460, ph = 260, px = (W - pw) / 2, py = 140;
   ctx.fillStyle = 'rgba(10, 8, 6, 0.55)';
-  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillRect(0, 56, W, H - 56 - CONFIG.view.logH);
   panel(px, py, pw, ph, '');
   ctx.textAlign = 'center';
   ctx.fillStyle = '#e8dcc0';
@@ -664,7 +725,7 @@ function renderCaptivePanel() {
   const n = state.pendingCaptives;
   const pw = 440, ph = 200, px = (W - pw) / 2, py = 160;
   ctx.fillStyle = 'rgba(10, 8, 6, 0.55)';
-  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillRect(0, 56, W, H - 56 - CONFIG.view.logH);
   panel(px, py, pw, ph, '');
   ctx.textAlign = 'center';
   ctx.fillStyle = '#e8dcc0';
@@ -684,7 +745,7 @@ function renderDecision() {
   if (!d || !state.paused) return;
   const pw = 480, ph = 220, px = (W - pw) / 2, py = 150;
   ctx.fillStyle = 'rgba(10, 8, 6, 0.6)';
-  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillRect(0, 56, W, H - 56 - CONFIG.view.logH);
   panel(px, py, pw, ph, '');
   ctx.textAlign = 'center';
   ctx.fillStyle = '#e8dcc0';
@@ -775,7 +836,7 @@ function renderGameOver() {
 function renderPauseOverlay() {
   if (!state.paused || state.battleReport || state.pendingCaptives > 0 || state.pendingDecision || state.gameOver) return;
   ctx.fillStyle = 'rgba(10, 8, 6, 0.45)';
-  ctx.fillRect(0, 56, W, H - 56 - 120);
+  ctx.fillRect(0, 56, W, H - 56 - CONFIG.view.logH);
   ctx.fillStyle = '#f2e3b6';
   ctx.font = 'bold 28px sans-serif';
   ctx.textAlign = 'center';

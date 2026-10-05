@@ -58,8 +58,10 @@ const state = {
   gameOver: null,        // {win, reason, detail}
 };
 // 开局自带建筑：粮仓+货仓（双仓入库点）+ 民房×6（住房上限 30 = 初始人口，满员开局）
-state.inGrid[0][2] = { type: 'granary', workers: 0 };
-state.inGrid[0][3] = { type: 'depot', workers: 0 };
+// 仓放城内中部行（08 §6 第 2 步）：合图后「产地→门→仓」是真实距离，仓贴北侧会让前郊运输
+// 距离 4 倍于后郊 → 前郊沦为陷阱选项。放中部把差距压到 ~1.5 倍，玩家仍可再往南迁做优化。
+state.inGrid[2][2] = { type: 'granary', workers: 0 };
+state.inGrid[2][3] = { type: 'depot', workers: 0 };
 state.inGrid[0][4] = { type: 'house', workers: 0 };
 state.inGrid[0][5] = { type: 'house', workers: 0 };
 state.inGrid[0][6] = { type: 'house', workers: 0 };

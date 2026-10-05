@@ -8,21 +8,47 @@
 'use strict';
 
 // ============================ 网格与建造（改造②） ============================
-const OUT = CONFIG.outGrid, IN = CONFIG.inGrid;
+// 坐标体系（08 §6 第 2 步）：sim 层一律用「世界坐标」，屏幕↔世界的换算归 render/ui。
+const OUT = CONFIG.outGrid, IN = CONFIG.inGrid, MAP = CONFIG.map;
 function gridOf(zone) { return zone === 'out' ? state.outGrid : state.inGrid; }
 function cfgOf(zone) { return zone === 'out' ? OUT : IN; }
-function cellAt(mx, my) {
-  const oc = Math.floor((mx - OUT.x0) / OUT.cell), or = Math.floor((my - OUT.y0) / OUT.cell);
-  if (or >= 0 && or < OUT.rows && oc >= 0 && oc < OUT.cols) return { zone: 'out', r: or, c: oc };
-  const ic = Math.floor((mx - IN.x0) / IN.cell), ir = Math.floor((my - IN.y0) / IN.cell);
+// 城外分区：行 < splitRow = 后郊（北），否则前郊（南）——左右是天险，城外只剩南北
+function outRowY0(r) { return r < OUT.splitRow ? OUT.y0North + r * OUT.cell : OUT.y0South + (r - OUT.splitRow) * OUT.cell; }
+function cellCenter(zone, r, c) {
+  const cfg = cfgOf(zone);
+  return { x: cfg.x0 + c * cfg.cell + cfg.cell / 2, y: (zone === 'out' ? outRowY0(r) : cfg.y0 + r * cfg.cell) + cfg.cell / 2 };
+}
+function cellAt(wx, wy) {
+  const oc = Math.floor((wx - OUT.x0) / OUT.cell);
+  const orN = Math.floor((wy - OUT.y0North) / OUT.cell);
+  if (oc >= 0 && oc < OUT.cols && orN >= 0 && orN < OUT.splitRow) return { zone: 'out', r: orN, c: oc };
+  const orS = Math.floor((wy - OUT.y0South) / OUT.cell);
+  if (oc >= 0 && oc < OUT.cols && orS >= 0 && orS < OUT.rows - OUT.splitRow) return { zone: 'out', r: OUT.splitRow + orS, c: oc };
+  const ic = Math.floor((wx - IN.x0) / IN.cell), ir = Math.floor((wy - IN.y0) / IN.cell);
   if (ir >= 0 && ir < IN.rows && ic >= 0 && ic < IN.cols) return { zone: 'in', r: ir, c: ic };
   return null;
 }
-function wallSegAt(mx, my) {
-  const wallY = 300;
-  if (my < wallY - 14 || my > wallY + 26) return null;
-  const s = Math.floor(mx / (W / CONFIG.wall.segNames.length));
-  return (s >= 0 && s < CONFIG.wall.segNames.length) ? s : null;
+// 墙段几何（08 §3：两门 + 各自门侧一段可攀墙；左右天险无段）
+function segRect(s) {
+  const g = MAP.segs[s], t = MAP.wallThick;
+  const y = g.side === 'north' ? MAP.city.y - t : MAP.city.y + MAP.city.h;
+  return { x: g.x, y: y - 8, w: g.w, h: t + 16, side: g.side };
+}
+function gatePos(s) { // 段 s 的门洞中心（默认前门 s=0）
+  const g = MAP.segs[s === undefined ? 0 : s];
+  return { x: g.x + g.w / 2, y: g.side === 'north' ? MAP.city.y - MAP.wallThick / 2 : MAP.city.y + MAP.city.h + MAP.wallThick / 2 };
+}
+function nearestGate(from) { // 城外产地按就近门入城（后郊→便门，前郊→正门）
+  const backY = MAP.city.y, frontY = MAP.city.y + MAP.city.h;
+  const useBack = Math.abs(from.y - backY) < Math.abs(from.y - frontY);
+  return gatePos(useBack ? 2 : 0); // 段 2 = 后门（便门），段 0 = 前门（正门）
+}
+function wallSegAt(wx, wy) {
+  for (let s = 0; s < MAP.segs.length; s++) {
+    const r = segRect(s);
+    if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h) return s;
+  }
+  return null;
 }
 function eachBuilding(fn) {
   for (let r = 0; r < OUT.rows; r++) for (let c = 0; c < OUT.cols; c++)
@@ -127,11 +153,6 @@ function assignWorker(b, d) {
 }
 // ---- walker 系统（v0.3）：统一走路实体 ----
 const WALKER_COLOR = { farm: '#7ec850', lumber: '#b08050', mine: '#9aa0aa', merchant: '#e0c060' }; // 农绿/伐木棕/矿灰/商人黄
-function cellCenter(zone, r, c) {
-  const cfg = cfgOf(zone);
-  return { x: cfg.x0 + c * cfg.cell + cfg.cell / 2, y: cfg.y0 + r * cfg.cell + cfg.cell / 2 };
-}
-function gatePos() { return { x: W / 2, y: 314 }; } // 城门通道（城墙 y≈300）
 function spawnWalker(kind, from, path, opts) {
   const w = Object.assign({ kind: kind, x: from.x, y: from.y, path: path, seg: 0, segT: 0,
     speed: CONFIG.walkSpeed, color: '#c9bd9e' }, opts || {});
@@ -176,7 +197,7 @@ function tryDispatchHaul(b, zone, r, c) { // 存量攒够一担 → 派 1 名在
     if (take > 0) { b.stock[k] -= take; cargo[k] = take; left -= take; }
   }
   const from = cellCenter(zone, r, c);
-  const gate = gatePos();
+  const gate = nearestGate(from);
   const to = cellCenter(wh.zone, wh.r, wh.c);
   b.workers -= 1; // 抽 1 人背货（走路误工）
   const bRef = { zone: zone, r: r, c: c, type: b.type };
@@ -222,7 +243,7 @@ function toggleRecall() {
     recallMemo = [];
     eachBuilding(function (b, zone, r, c) {
       if (zone !== 'out' || !b.workers) return;
-      const from = cellCenter(zone, r, c), gate = gatePos();
+      const from = cellCenter(zone, r, c), gate = nearestGate(from);
       const bRef = { zone: zone, r: r, c: c, type: b.type };
       recallMemo.push({ bRef: bRef, n: b.workers });
       const n = b.workers;

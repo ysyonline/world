@@ -12,9 +12,37 @@ const CONFIG = {
   startDay: 1,
   // 开局资源（九项 + 政治点，全部占位，待原型验证）
   start: { grain: 120, wood: 80, soil: 20, iron: 10, money: 200, pop: 30, soldiers: 0, prestige: 50, political: 0 },
-  // 网格：城外田区（3×10，cell56，x280~840 / y120~288）；关内（4×10，cell64，x280~920 / y340~596）
-  outGrid: { rows: 3, cols: 10, cell: 56, x0: 280, y0: 120 },
-  inGrid:  { rows: 4, cols: 10, cell: 64, x0: 280, y0: 340 },
+  // ---- 网格：旧「抽象横带」布局已作废，改用合图真地图（08 §6 第 2 步）----
+  // 城外分前郊/后郊两区（左右是深涧天险，城外只剩南北可用）：行 0~1 = 后郊（北），行 2~3 = 前郊（南）
+  outGrid: { rows: 4, cols: 8, cell: 52, x0: 142, y0North: 135, y0South: 483, splitRow: 2 },
+  inGrid:  { rows: 4, cols: 10, cell: 50, x0: 90, y0: 261 },
+  // ---- 合图地图（08 §6 第 2 步）：世界坐标；zoom=1 时 1 世界单位 = 1px ----
+  // 垂直（合计 722）：迷雾60 | 北接战75 | 后郊产业104 | 北墙22 | 城内200 | 南墙22 | 前郊产业104 | 南接战75 | 迷雾60
+  // 水平（合计 700）：左天险90 | 城520 | 右天险90
+  // 尺寸由来（反向推导，非拍脑袋）：①硬约束1 全景须装下 城内+城墙+城外产业+近郊接战
+  //   ②硬约束2 战斗档单兵屏幕直径 ≥12px ③城内格屏幕 ≥38px 才放得下三行标签
+  map: {
+    worldW: 700, worldH: 722,
+    fog: 60,        // 迷雾带（单侧）：商人进货去向 / 敌来向 / 烽燧驱散
+    battle: 75,     // 近郊接战区（单侧）：敌集结与我军出城拆除器械的战场
+    cliffW: 90,     // 左右深涧天险：不可建造 / 不可进攻 / 不可布防（08 §3 侧翼天险）
+    wallThick: 22,
+    city: { x: 90, y: 261, w: 520, h: 200 },
+    // 两门 + 各自门侧一段可攀墙 = 每方向 2 攻击点 = 全域 4 段布防（08 §3 进攻面方案②）
+    segs: [
+      { name: '前门',   side: 'south', x: 320, w: 60,  climb: false }, // 正门
+      { name: '前侧墙', side: 'south', x: 420, w: 120, climb: true  }, // 云梯可攀
+      { name: '后门',   side: 'north', x: 190, w: 60,  climb: false }, // 便门（耐久更低，第 3 步实装）
+      { name: '后侧墙', side: 'north', x: 300, w: 120, climb: true  },
+    ],
+  },
+  // 视口与相机：右栏常驻 280 + 顶 HUD 56 + 底日志 80 → 地图视口 1000×584
+  view: { x: 0, y: 56, w: 1000, h: 584, panelW: 280, logH: 80 },
+  camera: {
+    // 全景档 zoom 运行时按 fit 算出（0.81），不写死；战斗档为验收值：
+    // 下界 = 单兵≥12px（世界直径 13 → zoom≥0.92），上界 = 一方向「门+门侧墙」同屏（→zoom≤1.56）
+    battleZoom: 1.4, // [PLACEHOLDER 区间中值偏上，实测后回填]
+  },
   // 岗位效率曲线（01 §3.2）：x≤N → x/N；超员默认禁塞
   overstaffK: 2.5,
   hardCapJobs: true,
@@ -35,8 +63,8 @@ const CONFIG = {
   soldierPayPerDay: 1,
   desertBase: 0.10,
   desertPerDay: 0.05,
-  // 城墙分段（占位：甲乙丙丁四门）
-  wall: { segNames: ['甲', '乙', '丙', '丁'], logMaxPerSeg: 2, oilMaxPerSeg: 2, xbowMaxPerSeg: 1 },
+  // 城墙分段（08 §3 定案：两门 + 门侧可攀墙 = 4 段；左右天险不设段）；几何见 map.segs
+  wall: { segNames: ['前门', '前侧墙', '后门', '后侧墙'], logMaxPerSeg: 2, oilMaxPerSeg: 2, xbowMaxPerSeg: 1 },
   gateMaxHp: 12,
   gateRepairSoil: 20,     // 修门：土20+木5（用户定：土多木少），一次修满
   gateRepairWood: 5,
@@ -89,7 +117,9 @@ const CONFIG = {
   captiveEscapeRate: 0.1,
   // 运输线（v0.3 产者自运，01 §5 v0.4，占位）
   carryLoad: 5,           // 单人单趟负重 5 担
-  walkSpeed: 60,          // walker 步速 60 像素/秒（占用真实帧时间，与倍速同步）
+  // 步速（世界单位/秒）：合图后真实几何让「产地→最近门→仓」平均单程由 ~660 降到 ~258（-61%），
+  // 故 60 → 30 等比下调，维持运输税留在原 13~19% 区间（否则运输线不再构成约束）。[PLACEHOLDER·按 trace 复测]
+  walkSpeed: 30,
   // 商人与宵禁（01 §7 v0.4，占位）
   marketTax: 10,          // 市坊商税 10 钱/日直入库（坊5/肆12 占位上调，试玩后定）
   innTaxFactor: 0.5,      // 驿站过夜：次日商税 ×0.5（误早市）

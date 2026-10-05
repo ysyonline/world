@@ -51,9 +51,9 @@ console.assert(countBuilding('house') === 6, 'M3 开局6座民房（上限30）'
 console.assert(tryBuild('granary', 'in', 2, 0) === false, 'M3 粮仓限一座');
 console.assert(tryBuild('depot', 'in', 2, 1) === false, 'M3 货仓限一座');
 console.assert(houseCap() === 30, 'M3 住房上限=民房×5=30');
-console.assert(tryBuild('house', 'in', 2, 2) === true && houseCap() === 35 && getRes('money') === 260 && getRes('wood') === 135, 'M3 民房造价 钱20木10，上限+5');
-console.assert(demolish('in', 2, 2) === false, 'M3 民房不可拆');
-console.assert(demolish('in', 0, 2) === false, 'M3 粮仓不可拆');
+console.assert(tryBuild('house', 'in', 3, 0) === true && houseCap() === 35 && getRes('money') === 260 && getRes('wood') === 135, 'M3 民房造价 钱20木10，上限+5'); // 合图后粮仓在 in(2,2)，测试格改 3,0
+console.assert(demolish('in', 3, 0) === false, 'M3 民房不可拆');
+console.assert(demolish('in', 2, 2) === false, 'M3 粮仓不可拆');
 console.assert(tryBuild('barracks', 'in', 1, 1) === true, 'M3 建兵营');
 console.assert(tryBuild('barracks', 'in', 1, 2) === false, 'M3 兵营限一座');
 demolish('out', 0, 0); // 清场给运输测试重建
@@ -64,11 +64,10 @@ const farm = state.outGrid[0][0];
 for (let i = 0; i < 5; i++) assignWorker(farm, 1);
 console.assert(farm.workers === 5, 'T0 五农上岗');
 setRes('grain', 100);
-// 半日推进：产 10 → 派1人背5担 → walker 在途（farm.workers=4）
-stepGame(15);
-const stockMid = farm.stock.grain || 0;
-console.assert(stockMid >= CONFIG.carryLoad - 0.01 || state.walkers.some(w => w.kind === 'carry'), 'T1 攒满5担或已派趟（存量=' + stockMid.toFixed(2) + '）');
-console.assert(state.walkers.some(w => w.kind === 'carry'), 'T1 背货 walker 在途');
+// 攒满 5 担 → 自动派 1 人背回（直接给存量，避免断言受「当日产出速率 × 单程耗时」时序影响）
+farm.stock = { grain: 6 };
+stepGame(1); // 1 秒：触发派趟且未到达（合图后最短单程 ≈130 世界单位，步速 30 → 4.3s）
+console.assert(state.walkers.some(w => w.kind === 'carry'), 'T1 攒满5担自动派趟');
 console.assert(farm.workers === 4, 'T1 背货人离岗（在岗4，got ' + farm.workers + '）');
 // 推完一整日：入库 + 回岗
 stepGame(31);
@@ -78,7 +77,7 @@ farm.workers = 0; state.walkers.length = 0;
 const s0 = farm.stock.grain || 0;
 stepGame(31);
 console.assert(near(farm.stock.grain || 0, s0), 'T3 无折损（v0.3 删除1%/日），got ' + (farm.stock.grain || 0));
-console.assert(CONFIG.carryLoad === 5 && CONFIG.walkSpeed === 60, 'T4 负重5担/趟·步速60px/s');
+console.assert(CONFIG.carryLoad === 5 && CONFIG.walkSpeed === 30, 'T4 负重5担/趟·步速30（合图几何补偿后的标定值）');
 
 // ---- T5：收保（walker 撤离→到达变闲民） ----
 farm.workers = 4;
@@ -180,10 +179,11 @@ console.assert(rushConscript(bar2) === true && state.troops[3].prof === 20, 'M6 
 setRes('grain', 2000); setRes('money', 100); setRes('pop', 20); setRes('prestige', 44); setRes('soldiers', 0);
 if (!state.outGrid[0][0]) tryBuild('farm', 'out', 0, 0);
 state.outGrid[0][0].stock = { grain: 40 };
-state.outGrid[0][0].workers = 2;
+state.outGrid[0][0].workers = 1; // 只 1 人：不触发派趟（需 >1），单测劫掠率与本波产出
 state.walkers.length = 0;
-// 手造一个背货 walker（1 农背 5 粮在途）
-state.walkers.push({ kind: 'carry', x: 600, y: 200, path: [{ x: 640, y: 314 }], seg: 0, segT: 0, speed: 60,
+// 手造一个背货 walker（1 农背 5 粮在途）：世界坐标走「产地 → 便门」
+state.walkers.push({ kind: 'carry', x: cellCenter('out', 0, 0).x, y: cellCenter('out', 0, 0).y,
+  path: [{ x: gatePos(2).x, y: gatePos(2).y }], seg: 0, segT: 0, speed: CONFIG.walkSpeed,
   color: '#7ec850', cargo: { grain: 5 }, bRef: { zone: 'out', r: 0, c: 0, type: 'farm' }, day: state.day });
 state.recalled = false;
 const base = state.day;
@@ -191,9 +191,9 @@ CONFIG.waves = [{ day: base + 1, size: 6, siege: false, label: '小股骚扰' }]
 state.waveFired = {}; state.enemies = []; state.battleReport = null;
 AUTO.gate = false;
 stepGame(31);
-// 关门：暴露=2在田+1背货=3 → 杀 round(3×0.3)=1；产地存量被劫25%（存量含当日秒级产出，断言区间）
+// 关门：暴露=1在田+1背货=2 → 杀 round(2×0.3)=1；产地存量被劫25%（存量含当日秒级产出，断言区间）
 const sW1 = state.outGrid[0][0].stock.grain;
-console.assert(sW1 >= 30 * 0.7 && sW1 <= 55, 'W1 关门后存量在劫后区间（got ' + sW1.toFixed(1) + '）');
+console.assert(sW1 >= 29 && sW1 <= 37, 'W1 关门后存量在劫后区间（got ' + sW1.toFixed(1) + '）');
 console.assert(state.battleReport && state.battleReport.gateOpen === false && state.battleReport.fieldKilled === 1, 'W1 关门杀暴露1人');
 console.assert(getRes('pop') === 19, 'W1 遇害1人（got ' + getRes('pop') + '）');
 state.paused = false; state.battleReport = null; state.walkers.length = 0;

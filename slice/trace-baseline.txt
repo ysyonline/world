@@ -1,0 +1,79 @@
+D2 民31/35 兵0 岗13 闲18 粮110 木55 土20 铁10 钱110 望50 政0 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s2.2 | o0,1 farm w4 s2.5 | o1,0 lumber w2 s0.8]
+D3 民31/35 兵0 岗15 闲16 粮114 木65 土20 铁10 钱110 望50 政0 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s1.5 | o0,1 farm w5 s2.1 | o1,0 lumber w2 s1.3]
+D4 民32/35 兵0 岗15 闲17 粮123 木75 土20 铁10 钱110 望50 政0 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s0.9 | o0,1 farm w5 s1.7 | o1,0 lumber w2 s1.7]
+D5 民32/35 兵0 岗19 闲13 粮126 木45 土20 铁10 钱20 望50 政0 走6
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s0.3 | o0,1 farm w4 s1.3 | o1,0 lumber w2 s2 | o2,0 mine w2 s0.8]
+D6 民33/35 兵0 岗19 闲14 粮134 木55 土26 铁14 钱25 望50 政0 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s4.8 | o0,1 farm w4 s1 | o1,0 lumber w2 s2.1 | o2,0 mine w3 s1.5]
+D7 民33/35 兵0 岗19 闲14 粮141 木65 土29 铁16 钱30 望50 政0 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s3.9 | o0,1 farm w4 s0.6 | o1,0 lumber w2 s2.3 | o2,0 mine w3 s2.1]
+D8 民34/35 兵0 岗19 闲15 粮148 木75 土32 铁18 钱35 望50 政0 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s2.9 | o0,1 farm w4 s0.5 | o1,0 lumber w2 s2.4 | o2,0 mine w3 s2.8]
+D9 民34/35 兵0 岗19 闲15 粮154 木90 土35 铁20 钱40 望50 政0 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s2.1 | o0,1 farm w4 s0.2 | o1,0 lumber w3 s2.4 | o2,0 mine w3 s3.5]
+D10 民35/35 兵0 岗19 闲16 粮155 木100 土38 铁22 钱45 望50 政0 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s1.3 | o0,1 farm w5 s4.9 | o1,0 lumber w3 s2.4 | o2,0 mine w3 s4.1]
+D11 民35/35 兵0 岗19 闲16 粮160 木110 土41 铁24 钱50 望50 政0 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s0.7 | o0,1 farm w5 s4.5 | o1,0 lumber w3 s2.4 | o2,0 mine w3 s4.8]
+D12 民36/35 兵0 岗19 闲17 粮165 木120 土44 铁26 钱55 望50 政0 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s0.1 | o0,1 farm w5 s4.1 | o1,0 lumber w3 s2.4 | o2,0 mine w2 s0.3]
+D13 民36/35 兵0 岗19 闲17 粮169 木130 土47 铁28 钱60 望50 政0 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s4.6 | o0,1 farm w5 s3.6 | o1,0 lumber w3 s2.4 | o2,0 mine w2 s1.1]
+D14 民37/35 兵0 岗19 闲18 粮173 木140 土53 铁32 钱65 望50 政0 走2
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s3.7 | o0,1 farm w5 s3.2 | o1,0 lumber w3 s2.4 | o2,0 mine w3 s1.7]
+D15 民36/35 兵0 岗2 闲34 粮146 木135 土53 铁32 钱50 望50 政0 走0
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w0 s2.8 | o0,1 farm w1 s2.4 | o1,0 lumber w0 s1.8 | o1,1 farm w0 s0 | o2,0 mine w0 s1.3]
+D16 民37/35 兵0 岗31 闲6 粮120 木140 土56 铁34 钱90 望50 政5 走2
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s2.7 | o2,0 mine w3 s2]
+D17 民37/35 兵0 岗33 闲4 粮103 木120 土59 铁36 钱35 望49 政5 走2
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.2 | o1,1 farm w5 s2.7 | o2,0 mine w3 s2.6]
+D18 民37/35 兵0 岗34 闲3 粮86 木130 土62 铁38 钱40 望48 政5 走2
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w2 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.3 | o1,1 farm w5 s2.7 | o2,0 mine w3 s3.3]
+D19 民37/35 兵0 岗35 闲2 粮69 木140 土65 铁40 钱45 望47 政5 走2
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w3 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.3 | o1,1 farm w5 s2.7 | o2,0 mine w3 s4]
+D20 民36/35 兵1 岗35 闲1 粮52 木150 土68 铁42 钱50 望46 政5 走2
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w3 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.3 | o1,1 farm w5 s2.7 | o2,0 mine w3 s4.6]
+D21 民35/35 兵2 岗34 闲1 粮35 木160 土71 铁44 钱54 望45 政5 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w2 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.3 | o1,1 farm w5 s2.7 | o2,0 mine w2 s0.2]
+D22 民34/35 兵3 岗33 闲1 粮17 木170 土74 铁46 钱57 望44 政5 走3
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w10 s2.8 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.5 | o1,1 farm w5 s2.7 | o2,0 mine w2 s0.7]
+D23 民31/35 兵4 岗31 闲0 粮10 木175 土80 铁50 钱39 望43 政5 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s1.2 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.5 | o1,1 farm w5 s2.7 | o2,0 mine w3 s1.1 | o2,1 farm w4 s2.9]
+D24 民31/35 兵4 岗31 闲0 粮23 木185 土83 铁52 钱40 望42 政5 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s3.9 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.5 | o1,1 farm w5 s2.7 | o2,0 mine w3 s1.8 | o2,1 farm w4 s0.3]
+D25 民31/35 兵4 岗32 闲-1 粮41 木195 土86 铁54 钱41 望41 政5 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s1.7 | o0,1 farm w9 s2.4 | o1,0 lumber w2 s2.5 | o1,1 farm w5 s2.7 | o2,0 mine w3 s2.4 | o2,1 farm w5 s0.7]
+D26 民29/35 兵4 岗3 闲26 粮19 木200 土86 铁54 钱42 望40 政5 走0
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w0 s1.3 | o0,1 farm w0 s1.8 | o1,0 lumber w0 s1.9 | o1,1 farm w1 s2 | o2,0 mine w0 s1.8 | o2,1 farm w1 s0.6]
+D27 民29/35 兵4 岗29 闲0 粮24 木205 土89 铁56 钱43 望39 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w5 s2.1 | o0,1 farm w4 s3.9 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s4.4 | o2,0 mine w3 s2.5 | o2,1 farm w4 s3.3]
+D28 民29/35 兵4 岗29 闲0 粮59 木215 土92 铁58 钱44 望38 政5 走7
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s1.3 | o0,1 farm w3 s0.3 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s1 | o2,0 mine w3 s3.2 | o2,1 farm w4 s0.6]
+D29 民29/35 兵4 岗30 闲-1 粮99 木225 土95 铁60 钱45 望37 政5 走6
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s0.7 | o0,1 farm w4 s1.5 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s2.7 | o2,0 mine w3 s3.8 | o2,1 farm w5 s1.2]
+D30 民28/35 兵5 岗28 闲0 粮134 木235 土98 铁62 钱46 望37 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s4.5 | o0,1 farm w4 s2.8 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s4.4 | o2,0 mine w3 s4.5 | o2,1 farm w5 s1.6]
+D31 民28/35 兵5 岗28 闲0 粮169 木245 土101 铁64 钱46 望37 政5 走7
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s0.3 | o0,1 farm w4 s4.2 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s1 | o2,0 mine w2 s0.2 | o2,1 farm w5 s2]
+D32 民28/35 兵5 岗28 闲0 粮209 木255 土104 铁66 钱46 望37 政5 走6
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s1.2 | o0,1 farm w4 s0.5 | o1,0 lumber w2 s2.1 | o1,1 farm w4 s2.7 | o2,0 mine w2 s0.6 | o2,1 farm w5 s2.5]
+D33 民26/35 兵5 岗5 闲21 粮194 木260 土107 铁68 钱46 望37 政5 走0
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w0 s0.9 | o0,1 farm w0 s0.3 | o1,0 lumber w1 s1.6 | o1,1 farm w1 s2 | o2,0 mine w1 s0.4 | o2,1 farm w1 s1.9]
+D34 民26/35 兵5 岗26 闲0 粮206 木265 土107 铁68 钱46 望37 政5 走4
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s3 | o0,1 farm w4 s2.7 | o1,0 lumber w2 s2 | o1,1 farm w4 s4.4 | o2,0 mine w1 s2.5 | o2,1 farm w5 s4.3]
+D35 民26/35 兵5 岗26 闲0 粮238 木275 土107 铁68 钱46 望37 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s4 | o0,1 farm w4 s4.1 | o1,0 lumber w2 s2 | o1,1 farm w4 s1 | o2,0 mine w1 s4.6 | o2,1 farm w4 s1.5]
+D36 民26/35 兵5 岗27 闲-1 粮275 木285 土107 铁68 钱46 望37 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w1 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w4 s5 | o0,1 farm w4 s0.3 | o1,0 lumber w2 s2 | o1,1 farm w4 s2.7 | o2,0 mine w1 s6.6 | o2,1 farm w5 s1.9]
+D37 民25/35 兵6 岗25 闲0 粮312 木295 土107 铁68 钱46 望37 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s0.4 | o0,1 farm w4 s1.6 | o1,0 lumber w2 s2 | o1,1 farm w4 s4.4 | o2,0 mine w1 s8.7 | o2,1 farm w5 s2.5]
+D38 民25/35 兵6 岗25 闲0 粮343 木305 土107 铁68 钱45 望37 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s3.2 | o0,1 farm w4 s3 | o1,0 lumber w2 s2 | o1,1 farm w4 s1 | o2,0 mine w1 s10.8 | o2,1 farm w5 s2.9]
+D39 民25/35 兵6 岗25 闲0 粮374 木315 土107 铁68 钱44 望37 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w3 s1 | o0,1 farm w4 s4.3 | o1,0 lumber w2 s2 | o1,1 farm w4 s2.7 | o2,0 mine w1 s12.8 | o2,1 farm w5 s3.3]
+D40 民22/35 兵3 岗22 闲0 粮395 木325 土107 铁68 钱43 望47 政5 走5
+  [i0,2 granary w0 s0 | i0,3 depot w0 s0 | i0,4 house w0 s0 | i0,5 house w0 s0 | i0,6 house w0 s0 | i0,7 house w0 s0 | i1,1 barracks w0 s0 | i1,4 house w0 s0 | i1,5 house w0 s0 | i3,3 market w0 s0 | i3,6 house w0 s0 | o0,0 farm w0 s1.3 | o0,1 farm w4 s2.5 | o1,0 lumber w2 s0.4 | o1,1 farm w4 s1.2 | o2,0 mine w1 s14.5 | o2,1 farm w5 s4.8]
+END {"win":true,"reason":"守过总攻","detail":"塞上雄关屹立，胡骑远遁。声望 47 ≥ 20。"} 日40
