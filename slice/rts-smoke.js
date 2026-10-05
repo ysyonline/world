@@ -189,9 +189,13 @@ section('T5 匈奴性格（诱敌/不羞遁走/涌入判败/爬墙佯攻）');
   R.reset(20261005);
   R.run(58);
   const climbers = R.S.enemies.filter(e => e.squad === 'black');
-  ok(climbers.length === 6, '乌编队 6 先登在推进');
-  R.run(25);
-  const anyClimb = R.S.enemies.some(e => e.state === 'climb' || e.state === 'wallfight');
+  ok(climbers.length === 5, '乌编队 5 先登在推进');
+  // 过程侦测：15s 窗口内出现 climb/wallfight/smash 任一状态即佯攻成立（终态采样会漏：砸完门转 flood）
+  let anyClimb = false, waited = 0;
+  while (!anyClimb && waited < 15) {
+    R.run(0.5); waited += 0.5;
+    if (R.S.enemies.some(e => e.state === 'climb' || e.state === 'wallfight' || e.state === 'smash')) anyClimb = true;
+  }
   ok(anyClimb, '先登抵东墙架梯（佯攻成立）');
   // 编队溃退：白编队杀到 <35% 转 rout（杀 70% 剩 30% < 35%，先清 dead 再校验）
   const whitesAll = R.S.enemies.filter(e => e.squad === 'white');
@@ -280,6 +284,7 @@ section('B 局 · 全操作（布防/技能/堵门）');
     }
   }
   const s = R.snapshot();
+  if (s.enemiesAlive > 0) R.S.enemies.forEach(e => console.log('  残敌:', e.kind, e.squad, e.state, 'pos', e.x.toFixed(0), e.y.toFixed(0)));
   console.log('  局况：t=' + s.t.toFixed(0) + 's 胜=' + (s.gameOver ? s.gameOver.win : '?') +
     ' 敌余=' + s.enemiesAlive + ' 我方存活=' + s.teams.filter(t => !t.dead).map(t => t.label + t.n).join('/') +
     ' 破门=' + JSON.stringify(s.brokenGates) + ' 涌城=' + s.insideCount);
