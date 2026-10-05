@@ -294,6 +294,63 @@ section('B 局 · 全操作（布防/技能/堵门）');
   ok(s.kills.archer > 0 || s.kills.xbow > 0, '远程通道有击杀（弓/弩存在感）');
 })();
 
+// ============================ V2 局 · 出城拆器械两步决策（06 §5 克制环核心验证） ============================
+// 对照实验：同一局面（甲门外冲车×2 + 骍编队游骑×6 巡弋）——
+//   莽撞版：开局直接出城冲冲车（不压制铁骑/游骑）
+//   谨慎版：先上墙齐射消耗游骑（一波齐射+平射），再出城拆
+// 判据：谨慎版出城折损 < 莽撞版出城折损（"先创造窗口、再执行"成立=两步决策有真实收益）
+section('V2 局 · 出城两步决策（压制→出城 vs 莽撞直冲）');
+(function () {
+  const C = R.RTS_CONFIG.city, g0 = R.GATES[0];
+  const origLure = R.RTS_CONFIG.ai.lureTimes, origSiege = R.RTS_CONFIG.ai.siegeStart;
+  function setup() {
+    R.reset(20261005);
+    R.RTS_CONFIG.ai.lureTimes = [];          // 靶场：关诱敌
+    R.RTS_CONFIG.ai.siegeStart = 99999;      // 靶场：关总攻（防全套敌军混入）
+    const S = R.S;
+    S.enemies = []; S.ai.siegeSpawned = true; // 骗过胜利判定（敌清零即胜），本局只看折损
+    const mk = (kind, x, y, squad, state) => {
+      const e = { id: ++S.eid, kind, squad, x, y, hp: kind === 'ram' ? 12 : 3, maxHp: kind === 'ram' ? 12 : 3,
+        state, tx: null, ty: null, target: null, vsGate: g0, cd: 0, burning: 0, lureT: 0, climbT: 0, contestT: 0, smashT: 0,
+        lastHit: null, wallSide: null, dead: false, despawned: false, counted: false, blocked: 0 };
+      S.enemies.push(e); return e;
+    };
+    mk('ram', g0.x - 30, g0.y - 60, 'white', 'hold');  // 靶态冲车（hold=不砸门不跑，纯靶子）
+    mk('ram', g0.x + 30, g0.y - 60, 'white', 'hold');
+    for (let i = 0; i < 6; i++) mk('rider', C.x - 160 + i * 25, C.y + C.h * 0.4 + (i % 2) * 30, 'red', 'patrol');
+    return S;
+  }
+  const ramsAlive = (S) => S.enemies.filter(e => e.kind === 'ram' && !e.dead).length;
+  // —— 莽撞版：弓兵留城内原地，甲步兵直接出城拆 ——
+  let S = setup();
+  const t0 = S.teams[0];
+  R.select([0]); R.move(g0.x, g0.y - 90);
+  let guard = 0;
+  while (guard++ < 1200 && !t0.dead && ramsAlive(S) > 0 && !S.gameOver) R.run(0.5);
+  const rashLoss = 15 - t0.n; const rashRams = 2 - ramsAlive(S);
+  console.log('  莽撞版：步兵折损 ' + rashLoss + '/15，拆冲车 ' + rashRams + '/2，用时 ' + S.t.toFixed(0) + 's');
+  // —— 谨慎版：弓兵上墙齐射清光游骑，再出城 ——
+  S = setup();
+  const t0b = S.teams[0], t2b = S.teams[2];
+  R.select([2]); R.move(g0.x, C.y - 10);
+  R.run(6);
+  R.select([2]); R.trySkill('volley', 0, 0);
+  guard = 0;
+  while (guard++ < 1200 && S.enemies.some(e => e.kind === 'rider' && !e.dead) && !t2b.dead) R.run(0.5);
+  const ridersLeft = S.enemies.filter(e => e.kind === 'rider' && !e.dead).length;
+  R.select([0]); R.move(g0.x, g0.y - 90);
+  guard = 0;
+  while (guard++ < 1200 && !t0b.dead && ramsAlive(S) > 0 && !S.gameOver) R.run(0.5);
+  const careLoss = 15 - t0b.n; const careRams = 2 - ramsAlive(S);
+  console.log('  谨慎版：游骑剩 ' + ridersLeft + '，步兵折损 ' + careLoss + '/15，拆冲车 ' + careRams + '/2，用时 ' + S.t.toFixed(0) + 's');
+  ok(careRams >= 1, '谨慎版能拆掉冲车（V2 拆除通道）');
+  ok(rashLoss > 0, '莽撞直冲有惩罚（折损 ' + rashLoss + '）——克制环真实');
+  ok(rashLoss > careLoss, '两步决策有收益：谨慎折损(' + careLoss + ') < 莽撞(' + rashLoss + ')');
+  // 还原 CONFIG（防污染后续局）
+  R.RTS_CONFIG.ai.lureTimes = origLure;
+  R.RTS_CONFIG.ai.siegeStart = origSiege;
+})();
+
 // ============================ 汇总 ============================
 console.log('\n================ 结果 ================');
 console.log('PASS ' + pass + ' / FAIL ' + fail);
