@@ -116,6 +116,8 @@ const CONFIG = {
   raidKillPopPerRider: 1, // 入城铁骑杀人（上限 3）
   raidKillPopMax: 3,
   raidLootPrestige: 3,    // 被抢掠声望损失
+  interceptCoef: 0.5,     // 城内拦截系数 I（02 §4.1）：预备近战以逸待劳吃掉一半铁骑 [PLACEHOLDER]
+  interceptLoss: 0.4,     // 拦截交换损耗：每拦 K 骑阵亡 ⌊K×0.4⌋ 近战（永久减人口）[PLACEHOLDER]
   raidFieldRobRate: 0.25, // 关门：劫粮道=城外各产地存量被抢比例
   raidFieldKillRate: 0.3, // 关门：城外平民被杀比例（收保可免）
   // 俘虏处置（03 §4 最简版；种子随机可复现）
@@ -145,6 +147,7 @@ const CONFIG = {
   // 胜负硬条件（03 §3.3、02 §4）
   winPrestige: 20,        // 守过总攻且声望达标（占位）
   assaultWinPrestige: 10, // 打退总攻声望 +10
+  prestigeWarnLine: 10,   // 声望红色预警线（00-总纲 §5：归零即时判败前的最后提示）
   // 建筑造价表（01 §4.3 全表；zone: in=关内/out=城外）
   buildings: {
     // 城外产线：产出秒级累积产地存量，由在岗工人自运回城入库（v0.3 产者自运）
@@ -235,6 +238,37 @@ state.inGrid[1][5] = { type: 'house', workers: 0 };
 function pushLog(text) {
   state.log.push('第' + state.day + '日 · ' + text);
   if (state.log.length > CONFIG.maxLog) state.log.shift();
+}
+
+// ============================ 总攻前夜自动存档（00-总纲 §5：防"3 小时败于一次失误"） ============================
+// 快照点：总攻日晨（当日首 tick 前）——此时骚扰已打完、布防未定，是"重打总攻"最干净的起点。
+// 边界：战败/涌入判败后可读档；快照仅一份（新总攻覆盖旧档）；读档恢复全部 state（含 RNG 种子，可复现）。
+function autoSaveCheck() {
+  const nw = nextWave();
+  if (!nw || !nw.wave.siege) return;
+  if (nw.wave.day === state.day + 1 && !state.checkpoint) { // 总攻前夜（次日总攻）打一次快照
+    try {
+      state.checkpoint = JSON.parse(JSON.stringify({
+        day: state.day, res: state.res, outGrid: state.outGrid, inGrid: state.inGrid,
+        troops: state.troops, gateHp: state.gateHp, segLogs: state.segLogs, segOil: state.segOil, segXbow: state.segXbow,
+        inv: state.inv, walkers: state.walkers, curfewPolicy: state.curfewPolicy, merchants: state.merchants,
+        recalled: state.recalled, ledger: state.ledger, captives: state.captives, task: state.task,
+        nextTaskDay: state.nextTaskDay, waveFired: state.waveFired, rngState: state.rngState, unpaidDays: state.unpaidDays,
+      }));
+      pushLog('【存档】总攻前夜——已自动存档（战败可读档重打）');
+    } catch (e) { /* 快照失败不阻断游戏 */ }
+  }
+}
+function loadCheckpoint() {
+  const cp = state.checkpoint;
+  if (!cp) return false;
+  const keepLog = state.log.slice(-3); // 保留最近 3 条做上下文
+  Object.assign(state, JSON.parse(JSON.stringify(cp)));
+  state.log = keepLog;
+  state.battle = null; state.battleReport = null; state.enemies = []; state.decisionQueue = []; state.pendingDecision = null;
+  state.paused = true; state.gameOver = null; state.pendingCaptives = 0; state.checkpoint = cp; // 档保留（可反复读）
+  pushLog('【读档】回到总攻前夜——胡骑将至，这次布好防');
+  return true;
 }
 
 // ============================ 资源数据层（改造①） ============================
@@ -404,6 +438,7 @@ function settleDay(day) {
   pushLog('日结：' + resSummary());
 }
 function onNewDay(day) {
+  autoSaveCheck(); // 总攻前夜快照（在 settleDay 前打：拿的是"总攻日晨、当日结算前"的干净状态）
   settleDay(day);
 }
 
@@ -856,11 +891,19 @@ dailySettlers.push(function waves(day) {
     }
   }
 });
-// 预警（烽燧 +1 日）
+// 预警（烽燧 +1 日）+ 声望红色预警（00-总纲 §5：显性化）+ 总攻规模情报（"塞上肥关，胡骑必至"）
 dailySettlers.push(function raidWarning() {
   const nw = nextWave();
   if (nw && nw.wave.day - state.day <= warnDays() && nw.wave.day > state.day) {
-    pushLog('【' + (beaconCount() > 0 ? '烽燧' : '瞭望') + '】' + nw.wave.day + ' 日将有' + (nw.wave.siege ? '【总攻】' : nw.wave.label) + '，速布防！');
+    // 总攻规模情报：随声望升降（声望双刃剑显性化——玩家看得见"越富越危险"）
+    let scaleHint = '探得虏情：';
+    const p = getRes('prestige');
+    if (nw.wave.siege) scaleHint += p >= 70 ? '「塞上肥关，胡骑必至」——虏酋大聚，此战必重（预估：大举）' : p >= 45 ? '虏骑渐聚，其势不小（预估：中势）' : '边鄙小关，虏志在掠而不在城（预估：常势）';
+    else scaleHint += '游骑寇边，意在劫掠（预估：小股）';
+    pushLog('【' + (beaconCount() > 0 ? '烽燧' : '瞭望') + '】' + nw.wave.day + ' 日将有' + (nw.wave.siege ? '【总攻】' : nw.wave.label) + '，速布防！' + scaleHint);
+  }
+  if (getRes('prestige') < CONFIG.prestigeWarnLine && !state.gameOver) {
+    pushLog('【民心】声望濒危（' + getRes('prestige') + '/' + CONFIG.prestigeWarnLine + '）——再跌即散关！赈济、胜仗、护民皆可挽回');
   }
 });
 
@@ -888,16 +931,31 @@ function resolveRaid(wave, gateOpen) {
   if (gateOpen) {
     // 开门：小股铁骑入城抢掠（单次上限：粮=库存10%、钱=15%，抢完即走）
     const raiders = Math.max(1, Math.ceil(comp.iron / 2));
-    rep.lootGrain = Math.min(Math.round(getRes('grain') * CONFIG.raidLootGrainCap), raiders * CONFIG.raidLootGrainPerRider, getRes('grain'));
-    rep.lootMoney = Math.min(Math.round(getRes('money') * CONFIG.raidLootMoneyCap), raiders * CONFIG.raidLootMoneyPerRider, getRes('money'));
-    rep.lootPop = Math.min(getRes('pop'), Math.min(CONFIG.raidKillPopMax, raiders * CONFIG.raidKillPopPerRider));
-    rep.lootPrestige = CONFIG.raidLootPrestige;
+    // 城内拦截结算（02 §4.1，2026-10-05 定案）：预备近战以逸待劳——K=min(⌊近战×I⌋,R)，只减损不刷兵
+    const meleeReserve = state.troops.filter(function (t) { return t.seg === null && t.type === 'melee'; }).length; // 未上墙的近战=城内驻留
+    const K = Math.min(Math.floor(meleeReserve * CONFIG.interceptCoef), raiders);
+    rep.interceptKilled = K;
+    if (K > 0) {
+      const dead = Math.floor(K * CONFIG.interceptLoss); rep.interceptLoss = dead;
+      for (let d = 0; d < dead; d++) { // 阵亡取熟练度最低者（新兵先死，沿用战场惯例）
+        let mi = -1;
+        state.troops.forEach(function (t, i) { if (t.seg === null && t.type === 'melee' && (mi < 0 || t.prof < state.troops[mi].prof)) mi = i; });
+        if (mi >= 0) state.troops.splice(mi, 1);
+      }
+      if (dead > 0) { state.res.soldiers -= dead; addRes('pop', -dead); }
+    }
+    const relief = 1 - K / Math.max(raiders, 1); // 拦截减损系数
+    rep.lootGrain = Math.round(Math.min(Math.round(getRes('grain') * CONFIG.raidLootGrainCap), raiders * CONFIG.raidLootGrainPerRider, getRes('grain')) * relief);
+    rep.lootMoney = Math.round(Math.min(Math.round(getRes('money') * CONFIG.raidLootMoneyCap), raiders * CONFIG.raidLootMoneyPerRider, getRes('money')) * relief);
+    rep.lootPop = Math.min(getRes('pop'), Math.round(Math.min(CONFIG.raidKillPopMax, raiders * CONFIG.raidKillPopPerRider) * relief));
+    rep.lootPrestige = Math.max(0, Math.round(CONFIG.raidLootPrestige * relief));
     LEDGER_SRC = '匈奴抢掠';
     addRes('grain', -rep.lootGrain);
     addRes('money', -rep.lootMoney);
     addRes('pop', -rep.lootPop);
     addRes('prestige', -rep.lootPrestige);
     LEDGER_SRC = null;
+    rep.kills += K; // 拦截击杀计入城头反击总数（声望账本可见收益）
   } else {
     // 关门：只扰城外——劫粮道（产地存量被抢）/ 杀城外暴露人口（收保=撤离在途不可杀）/ 烧烽燧
     eachBuilding(function (b, zone) {
@@ -964,7 +1022,8 @@ function resolveRaid(wave, gateOpen) {
   state.battleReport = rep;
   state.paused = true;
   if (gateOpen) {
-    pushLog('【劫掠】铁骑 ' + Math.max(1, Math.ceil(comp.iron / 2)) + ' 骑冲入城内：抢粮 ' + rep.lootGrain + '、钱 ' + rep.lootMoney + '、杀民 ' + rep.lootPop + '（声望-' + rep.lootPrestige + '）');
+    pushLog('【劫掠】铁骑 ' + Math.max(1, Math.ceil(comp.iron / 2)) + ' 骑冲入城内：抢粮 ' + rep.lootGrain + '、钱 ' + rep.lootMoney + '、杀民 ' + rep.lootPop + '（声望-' + rep.lootPrestige + '）'
+      + (rep.interceptKilled > 0 ? '；【城内拦截】预备队格杀 ' + rep.interceptKilled + ' 骑（我方阵亡 ' + (rep.interceptLoss || 0) + '）' : ''));
   } else {
     pushLog('【骚扰】关门固守：城外被劫存量 ' + Math.round(rep.fieldRobbed) + (rep.fieldKilled ? '、平民遇害 ' + rep.fieldKilled : '') + (rep.beaconBurned ? '、烽燧被焚' : ''));
   }
@@ -1521,6 +1580,7 @@ function renderHUD() {
   warn += '  宵禁：' + policyLabel + (state.innStay ? '（明日商税减半）' : '') + '  在押' + state.captives;
   if (state.unpaidDays > 0) warn += '  【欠饷' + state.unpaidDays + '日】';
   if (over) warn += '  【住房不足：' + (getRes('pop') - cap) + '人流落街头】';
+  if (getRes('prestige') < CONFIG.prestigeWarnLine) warn += '  【⚠声望濒危 ' + getRes('prestige') + '】';
   ctx.fillStyle = state.famine || state.unpaidDays > 0 || over ? '#ff8a7a' : (getRes('grain') < threshold * 2 ? '#efb63c' : '#7a6f58');
   ctx.fillText(warn, 430, 36);
   // 任务角标
@@ -2184,10 +2244,19 @@ function renderGameOver() {
   ctx.fillText(state.gameOver.detail, px + pw / 2, py + 112);
   ctx.fillText('第 ' + state.day + ' 日 · 民' + getRes('pop') + ' 兵' + getRes('soldiers') + ' 声望' + getRes('prestige') + ' 政' + getRes('political'), px + pw / 2, py + 138);
   ctx.fillStyle = '#8a7c5e';
-  ctx.fillText('复盘：输在哪一环？粮？门？声望？——刷新页面重开一局', px + pw / 2, py + 168);
-  drawButton(px + pw / 2 - 70, py + ph - 52, 140, 32, '重 开', false, function () {
-    if (typeof location !== 'undefined' && location.reload) location.reload();
-  });
+  ctx.fillText(state.checkpoint ? '复盘：输在哪一环？粮？门？声望？——或读档重打总攻' : '复盘：输在哪一环？粮？门？声望？——刷新页面重开一局', px + pw / 2, py + 168);
+  if (state.checkpoint && !state.gameOver.win) {
+    drawButton(px + pw / 2 - 160, py + ph - 52, 140, 32, '读档 · 总攻前夜', false, function () {
+      if (loadCheckpoint()) pushLog('【读档】已回到总攻日晨');
+    });
+    drawButton(px + pw / 2 + 20, py + ph - 52, 140, 32, '重 开', false, function () {
+      if (typeof location !== 'undefined' && location.reload) location.reload();
+    });
+  } else {
+    drawButton(px + pw / 2 - 70, py + ph - 52, 140, 32, '重 开', false, function () {
+      if (typeof location !== 'undefined' && location.reload) location.reload();
+    });
+  }
 }
 function renderPauseOverlay() {
   if (!state.paused || state.battleReport || state.pendingCaptives > 0 || state.pendingDecision || state.gameOver) return;

@@ -212,6 +212,44 @@ stepGame(31);
 console.assert(state.battleReport.kills === 2, 'W2 弓兵3轮歼敌2，got ' + state.battleReport.kills);
 console.assert(state.battleReport.lootGrain === 8 && state.battleReport.lootMoney === 15, 'W2 开门抢掠上限');
 state.paused = false; state.battleReport = null;
+// W3：城内拦截（02 §4.1）——size=6 骚扰波 iron=⌈6×0.25⌉=2 → 入城 R=max(1,⌈2/2⌉)=1 骑；4 预备近战 K=min(⌊4×0.5⌋,1)=1 全拦
+setRes('grain', 100); setRes('money', 100); setRes('pop', 20); setRes('prestige', 44);
+setRes('soldiers', 6);
+state.troops.length = 0;
+for (let i = 0; i < 2; i++) state.troops.push({ prof: 80, seg: 0, type: 'archer' });
+for (let i = 0; i < 4; i++) state.troops.push({ prof: 60, seg: null, type: 'melee' }); // 4 近战预备队
+CONFIG.waves = [{ day: state.day + 1, size: 6, siege: false, label: '小股骚扰' }];
+state.waveFired = {}; state.checkpoint = null;
+stepGame(31);
+const repW3 = state.battleReport;
+console.assert(repW3 && repW3.interceptKilled === 1, 'W3 拦截击杀 K=min(⌊4×0.5⌋,1)=1 全拦, got ' + (repW3 && repW3.interceptKilled));
+console.assert(repW3 && repW3.interceptLoss === 0, 'W3 拦截阵亡 ⌊1×0.4⌋=0, got ' + (repW3 && repW3.interceptLoss));
+console.assert(repW3 && repW3.lootGrain === 0 && repW3.lootMoney === 0 && repW3.lootPrestige === 0, 'W3 全拦=零损失（relief=0）, got ' + (repW3 && repW3.lootGrain + '/' + repW3.lootMoney + '/' + repW3.lootPrestige));
+state.paused = false; state.battleReport = null;
+
+// ---- V：预警与存档（00-总纲 §5 实装项） ----
+// V1：声望<10 红色预警日志
+setRes('prestige', 9); state.day += 1; onNewDay(state.day);
+console.assert(state.log.some(x => x.indexOf('声望濒危') >= 0), 'V1 声望濒危日志');
+setRes('prestige', 50);
+// V2：总攻预警带规模情报（声望≥70 → "塞上肥关"文案；预警窗口 raidWarnDays=3 内）
+setRes('prestige', 75);
+CONFIG.waves = [{ day: state.day + 2, size: 10, siege: true, label: '总攻' }];
+state.waveFired = {}; state.checkpoint = null;
+state.day += 1; onNewDay(state.day);
+console.assert(state.log.some(x => x.indexOf('塞上肥关') >= 0), 'V2 高声望总攻情报含"塞上肥关"');
+// V3：总攻前夜自动存档（day+1=总攻日 → 今日晨即前夜快照）+ 读档往返
+// 注意：快照打在 onNewDay 开头（日结算前），所以 cp 粮=前夜值 100；断言以 cp 内容为准（读档后=前夜）
+console.assert(state.checkpoint && state.checkpoint.day === state.day, 'V3 总攻前夜快照已打（day=' + (state.checkpoint && state.checkpoint.day) + '）');
+const cpDay = state.checkpoint.day, cpGrain = state.checkpoint.res.grain, rngBefore = state.rngState;
+addRes('grain', -50); state.day = 99; setRes('prestige', 1); setRes('prestige', 0); // 破坏现场
+console.assert(state.gameOver && state.gameOver.win === false, 'V3 现场已败');
+const okLoad = loadCheckpoint();
+console.assert(okLoad && state.day === cpDay && getRes('grain') === cpGrain && state.rngState === rngBefore, 'V3 读档恢复（day/粮=前夜值/RNG种子一致）');
+console.assert(state.gameOver === null && state.battle === null && state.paused === true, 'V3 读档清战斗态并暂停');
+CONFIG.waves = []; state.checkpoint = null;
+state.paused = false;
+setRes('prestige', 50);
 
 // ---- S：总攻（决策点×3 + 门破≠败 + 胜利判定，沿用） ----
 setRes('grain', 5000); setRes('money', 500); setRes('pop', 50); setRes('prestige', 50);
