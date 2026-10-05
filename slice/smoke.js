@@ -1,11 +1,8 @@
 // 无头冒烟回归 v0.3：Node 直接跑 `node slice/smoke.js`，不需要浏览器
 // 覆盖 04-垂直切片 v0.3 裁决：数据层/建造/产者自运walker/双仓/收保/住房软上限/三态宵禁驿站/账本/三营/波次/守城/决策点/皇帝任务/胜负
-// 原理：抽出 index.html 的 <script> 塞进 DOM 桩 eval，再跑断言；AUTO 全局自动应答决策点
-const fs = require('fs');
-const path = require('path');
-
-const htmlPath = path.join(__dirname, 'index.html');
-const code = fs.readFileSync(htmlPath, 'utf8').match(/<script>([\s\S]*)<\/script>/)[1];
+// 原理：按 index.html 的 <script src> 顺序加载 config/state/sim/render/ui 五模块塞进 DOM 桩 eval，再跑断言；AUTO 全局自动应答决策点
+const { loadSliceModules } = require('./load-modules');
+const code = loadSliceModules();
 
 const ctxProxy = new Proxy({}, { get: (t, p) => (p === 'canvas' ? {} : (p === 'measureText' ? (s) => ({ width: String(s).length * 7 }) : () => {})) });
 const fakeCanvas = {

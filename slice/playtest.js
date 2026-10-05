@@ -5,9 +5,8 @@
 //    本脚本用最小获胜策略（田林矿+市坊+兵营+5 农田，器械靠工匠坊前置木材储备）。
 //    正式调参轮应解决：①开局钱 180 对建筑链偏紧 ②常闭宵禁税减半进一步压钱。
 // 调参入口：只改 index.html 的 CONFIG，本文件只读
-const fs = require('fs');
-const path = require('path');
-const code = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').match(/<script>([\s\S]*)<\/script>/)[1];
+const { loadSliceModules } = require('./load-modules');
+const code = loadSliceModules();
 const ctxProxy = new Proxy({}, { get: (t, p) => (p === 'canvas' ? {} : (p === 'measureText' ? (s) => ({ width: 7 }) : () => {})) });
 globalThis.document = { getElementById: () => ({ getContext: () => ctxProxy, width: 1280, height: 720, addEventListener: () => {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) }) };
 globalThis.window = { addEventListener: () => {} };
