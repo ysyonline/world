@@ -365,7 +365,9 @@ function tryBuild(key, zone, r, c) {
   const def = CONFIG.buildings[key];
   const chk = canBuildAt(key, zone, r, c);
   if (!chk.ok) { pushLog('建造【' + def.label + '】失败：' + chk.reason); return false; }
+  LEDGER_SRC = '建造·' + def.label;
   for (const k of Object.keys(def.cost)) addRes(k, -def.cost[k]);
+  LEDGER_SRC = null;
   const b = { type: key, workers: 0 };
   if (def.zone === 'out') { b.stock = {}; }
   if (key === 'barracks') b.queue = [];       // 受训队列 {left, type}
@@ -385,7 +387,9 @@ function demolish(zone, r, c) {
   if (b.type === 'depot' && countBuilding('depot') <= 1) { pushLog('货仓不可拆（木土铁入库点）'); return false; }
   if (b.type === 'house') { pushLog('民房不可拆（拆屋赶民，关隘不容）'); return false; }
   if (b.type === 'market' && b.merchant) state.merchants -= 1; // 拆市坊商人遣散回闲民
+  LEDGER_SRC = '拆除返还·' + def.label;
   for (const k of Object.keys(def.cost)) addRes(k, Math.floor(def.cost[k] / 2));
+  LEDGER_SRC = null;
   g[r][c] = null;
   if (state.selected && state.selected.zone === zone && state.selected.r === r && state.selected.c === c) state.selected = null;
   pushLog('拆除【' + def.label + '】，返还一半造价');
@@ -491,20 +495,11 @@ function tryDispatchHaul(b, zone, r, c) { // 存量攒够一担 → 派 1 名在
     color: WALKER_COLOR[b.type] || '#c9bd9e',
     cargo: cargo, bRef: bRef,
     onArrive: function (w) {
-      // 入库才算玩家收入（账本按线记）
-      LEDGER_SRC = null;
-      Object.keys(w.cargo).forEach(function (k) { addRes(k, w.cargo[k]); });
-      // 记账：按产地类型分来源
-      LEDGER_SRC = null;
+      // 入库才算玩家收入（v0.3.1：直接按产地记来源，废弃「先记其他再冲销」垫片——它会残留"其他 0"脏条目）
       const srcMap = { farm: '农田', lumber: '伐木场', mine: '矿洞' };
-      Object.keys(w.cargo).forEach(function (k) {
-        const L = state.ledger.today;
-        if (!L[k]) L[k] = {};
-        const src = srcMap[w.bRef.type] || '自运';
-        L[k][src] = (L[k][src] || 0) + w.cargo[k];
-        // addRes 已按「其他」记过一笔，冲销再记正名（保持 addRes 通用性）
-        L[k]['其他'] = (L[k]['其他'] || 0) - w.cargo[k];
-      });
+      LEDGER_SRC = srcMap[w.bRef.type] || '自运';
+      Object.keys(w.cargo).forEach(function (k) { addRes(k, w.cargo[k]); });
+      LEDGER_SRC = null;
       const b = gridOf(w.bRef.zone)[w.bRef.r][w.bRef.c];
       if (b && b.type === w.bRef.type && b.workers < CONFIG.buildings[b.type].capacity) {
         b.workers += 1; // 回岗继续干活（岗满则退回闲民池——离开期间被顶替）
@@ -708,15 +703,26 @@ dailySettlers.push(function pay(day) {
 
 // ============================ 兵营三营（改造⑤，日结⑥） ============================
 const TYPE_LABEL = { melee: '步兵', archer: '弓兵', engineer: '工兵' };
+function traineesOf(b, type) { // v0.3.1 分营：按兵种取在训列表
+  return b.queue.filter(function (t) { return t.type === type; });
+}
 function sendTrainee(b, type) {
-  if (b.queue.length >= CONFIG.buildings.barracks.capacity) { pushLog('营房已满'); return false; }
+  // v0.3.1 分营：每营独立 capacity 席位，互不挤占（用户反馈：三种兵分别设置）
+  const q = traineesOf(b, type);
+  if (q.length >= CONFIG.buildings.barracks.capacity) { pushLog('【' + TYPE_LABEL[type] + '营】席位已满（每营各 ' + CONFIG.buildings.barracks.capacity + ' 席）'); return false; }
   if (idlePop() <= 0) { pushLog('闲民不足，无法送训'); return false; }
   b.queue.push({ left: CONFIG.trainingDays, type: type });
   b.workers = b.queue.length;
-  pushLog('送训 1 人入【' + TYPE_LABEL[type] + '营】（' + CONFIG.trainingDays + ' 日成兵）');
+  pushLog('送训 1 人入【' + TYPE_LABEL[type] + '营】（' + CONFIG.trainingDays + ' 日成兵 · ' + (q.length + 1) + '/' + CONFIG.buildings.barracks.capacity + '）');
   return true;
 }
-function removeTrainee(b) {
+function removeTrainee(b, type) {
+  if (type !== undefined) { // v0.3.1 按兵种退训（退最晚入营者，无损：left 未减过的先退）
+    for (let i = b.queue.length - 1; i >= 0; i--) {
+      if (b.queue[i].type === type) { b.queue.splice(i, 1); b.workers = b.queue.length; return true; }
+    }
+    return false;
+  }
   if (!b.queue.length) return false;
   b.queue.pop();
   b.workers = b.queue.length;
@@ -807,8 +813,10 @@ function repairGate(seg) {
   if (state.gateHp[seg] >= CONFIG.gateMaxHp) { pushLog('城门完好'); return false; }
   if (getRes('soil') < CONFIG.gateRepairSoil) { pushLog('修门需土 ' + CONFIG.gateRepairSoil + '，不足'); return false; }
   if (getRes('wood') < CONFIG.gateRepairWood) { pushLog('修门需木 ' + CONFIG.gateRepairWood + '，不足'); return false; }
+  LEDGER_SRC = '修门';
   addRes('soil', -CONFIG.gateRepairSoil);
   addRes('wood', -CONFIG.gateRepairWood);
+  LEDGER_SRC = null;
   state.gateHp[seg] = CONFIG.gateMaxHp;
   pushLog('修缮【' + CONFIG.wall.segNames[seg] + '】段城门（土-' + CONFIG.gateRepairSoil + ' 木-' + CONFIG.gateRepairWood + '）');
   return true;
@@ -884,10 +892,12 @@ function resolveRaid(wave, gateOpen) {
     rep.lootMoney = Math.min(Math.round(getRes('money') * CONFIG.raidLootMoneyCap), raiders * CONFIG.raidLootMoneyPerRider, getRes('money'));
     rep.lootPop = Math.min(getRes('pop'), Math.min(CONFIG.raidKillPopMax, raiders * CONFIG.raidKillPopPerRider));
     rep.lootPrestige = CONFIG.raidLootPrestige;
+    LEDGER_SRC = '匈奴抢掠';
     addRes('grain', -rep.lootGrain);
     addRes('money', -rep.lootMoney);
     addRes('pop', -rep.lootPop);
     addRes('prestige', -rep.lootPrestige);
+    LEDGER_SRC = null;
   } else {
     // 关门：只扰城外——劫粮道（产地存量被抢）/ 杀城外暴露人口（收保=撤离在途不可杀）/ 烧烽燧
     eachBuilding(function (b, zone) {
@@ -1415,7 +1425,9 @@ window.addEventListener('keydown', function (e) {
   const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(e.code);
   if (idx >= 0 && idx < RES_KEYS.length) {
     const d = e.shiftKey ? -10 : 10;
+    LEDGER_SRC = '调试';
     addRes(RES_KEYS[idx], d);
+    LEDGER_SRC = null;
     pushLog('调试：' + RES_LABEL[RES_KEYS[idx]] + (d > 0 ? '+' : '') + d);
   }
 });
@@ -1564,7 +1576,7 @@ function renderLedger() {
   LEDGER_KEYS.forEach(function (k) {
     const net = yd && yd.net ? (yd.net[k] || 0) : 0;
     const flows = state.ledger.today[k] || {};
-    const fStr = Object.keys(flows).map(function (s) { return s + (flows[s] > 0 ? '+' : '') + Math.round(flows[s] * 10) / 10; }).join(' ') || '—';
+    const fStr = Object.keys(flows).filter(function (s) { return Math.abs(flows[s]) >= 0.05; }).map(function (s) { return s + (flows[s] > 0 ? '+' : '') + Math.round(flows[s] * 10) / 10; }).join(' ') || '—'; // v0.3.1 过滤零值条目（防"其他 0"残留显示）
     const e = Math.round((est[k] || 0) * 10) / 10;
     ctx.fillStyle = '#c9bd9e';
     ctx.fillText(RES_LABEL[k], x + 12, y);
@@ -1742,9 +1754,10 @@ function renderGridZone(zone) {
         ctx.font = (zone === 'out' ? 11 : 12) + 'px sans-serif';
         ctx.fillText(CONFIG.buildings[b.type].label, x + cfg.cell / 2, y + cfg.cell / 2 - 8);
         const cap = CONFIG.buildings[b.type].capacity;
-        ctx.fillStyle = b.workers > cap ? '#ff8a7a' : '#d8cdb2';
+        const capShow = b.type === 'barracks' ? cap * 3 : cap; // v0.3.1 分营：兵营显示总席位=三营之和
+        ctx.fillStyle = b.workers > capShow ? '#ff8a7a' : '#d8cdb2';
         ctx.font = '10px sans-serif';
-        if (cap > 0) ctx.fillText((b.type === 'barracks' ? '训' : '人') + b.workers + '/' + cap, x + cfg.cell / 2, y + cfg.cell / 2 + 8); // 兵营显示「训」=在训学员席（训毕离营编入部队）
+        if (cap > 0) ctx.fillText((b.type === 'barracks' ? '训' : '人') + b.workers + '/' + capShow, x + cfg.cell / 2, y + cfg.cell / 2 + 8); // 兵营显示「训」=在训学员席（训毕离营编入部队）
         // 城外产地「待运」角标（v0.3：攒够 5 担自动有人背回）
         if (zone === 'out' && b.stock) {
           const s = Object.keys(b.stock).reduce(function (sum, k) { return sum + b.stock[k]; }, 0);
@@ -1798,7 +1811,7 @@ function renderPalette() {
 }
 // 运输线列表（v0.3：一条线=一个产地→对应仓库；脚夫废除）
 function renderTransport() {
-  const px = 14, py = 470, pw = 150, ph = 126;
+  const px = 1010, py = 316, pw = 256, ph = 126; // v0.3.1：原位(14,470)盖住建菜单兵营/市坊按钮——搬右栏空区
   panel(px, py, pw, ph, '运 输 线');
   ctx.font = '11px sans-serif';
   ctx.textAlign = 'left';
@@ -1852,43 +1865,45 @@ function renderBuildingPanel() {
   ctx.fillStyle = '#c9bd9e';
   let y = py + 42;
   if (b.type === 'barracks') {
-    const n = b.queue.length, cap = def.capacity;
-    // 两套语义分栏：在训（学员席）≠ 在编部队（已离营的兵）——防「兵营 0/6 但部队 6 人」迷惑
-    ctx.fillStyle = '#c9a45c';
-    ctx.fillText('【在训】' + n + '/' + cap + ' 席 · 满训 ' + CONFIG.trainingDays + ' 日→熟练 80%', px + 12, y); y += 20;
-    if (n) {
-      const lefts = b.queue.map(function (t) { return t.left; });
-      ctx.fillStyle = '#8a7c5e';
-      ctx.fillText('进度：剩 ' + Math.min.apply(null, lefts) + '~' + Math.max.apply(null, lefts) + ' 日 · 训毕离营编入部队', px + 12, y);
-    } else {
-      ctx.fillStyle = '#8a7c5e';
-      ctx.fillText('进度：空闲（点下方按钮送闲民入营受训）', px + 12, y);
-    }
-    y += 20;
+    // v0.3.1 三营分列（用户反馈：兵/弓/工应分别设置）——每营一行：在训进度 + 分营 −/+ 按钮
+    const list = [['melee', '步'], ['archer', '弓'], ['engineer', '工']];
+    list.forEach(function (row) {
+      const q = b.queue.filter(function (x) { return x.type === row[0]; });
+      ctx.fillStyle = '#c9a45c';
+      let line = '【' + row[1] + '兵营】训' + q.length + '/' + def.capacity;
+      if (q.length) {
+        const lefts = q.map(function (x) { return x.left; });
+        line += ' 剩' + Math.min.apply(null, lefts) + '~' + Math.max.apply(null, lefts) + '日';
+      } else {
+        line += ' 空闲';
+      }
+      ctx.fillText(line, px + 12, y);
+      drawButton(px + 164, y - 10, 40, 20, '−', false, function () { removeTrainee(b, row[0]); }, q.length <= 0);
+      drawButton(px + 210, y - 10, 36, 20, '+' + row[1], false, function () { sendTrainee(b, row[0]); }, !(q.length < def.capacity && idlePop() > 0));
+      y += 24;
+    });
+    ctx.fillStyle = '#7a6f58';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('每营各 ' + def.capacity + ' 席 · 满训 ' + CONFIG.trainingDays + ' 日→熟练80%，训毕离营编入部队', px + 12, y); y += 16;
+    ctx.font = '13px sans-serif';
     const t = state.troops;
     const nm = t.filter(x => x.type === 'melee').length, na = t.filter(x => x.type === 'archer').length, ne = t.filter(x => x.type === 'engineer').length;
     ctx.fillStyle = '#c9bd9e';
     if (t.length) {
       const avg = t.reduce(function (s, x) { return s + x.prof; }, 0) / t.length;
       const onWall = t.filter(x => x.seg !== null).length;
-      ctx.fillText('【在编部队】' + t.length + ' 人 · 步' + nm + ' 弓' + na + ' 工' + ne + ' · 均熟练 ' + Math.round(avg) + '%', px + 12, y); y += 20;
+      ctx.fillText('【在编部队】' + t.length + '人·步' + nm + '弓' + na + '工' + ne + '·均熟练' + Math.round(avg) + '%', px + 12, y); y += 18;
       ctx.fillStyle = '#8a7c5e';
-      ctx.fillText('布防去向：上墙 ' + onWall + ' · 预备 ' + (t.length - onWall) + '（点城墙段调配）', px + 12, y);
+      ctx.fillText('布防：上墙' + onWall + '·预备' + (t.length - onWall) + '（点城墙段调配）', px + 12, y);
     } else {
-      ctx.fillText('【在编部队】暂无 —— 训毕的兵在此显示，驻防点城墙', px + 12, y);
+      ctx.fillText('【在编部队】暂无——训毕的兵在此显示，驻防点城墙', px + 12, y);
     }
-    y += 20;
+    y += 18;
     ctx.fillStyle = state.unpaidDays > 0 ? '#ff8a7a' : '#8a7c5e';
-    ctx.fillText(state.unpaidDays > 0 ? '军饷：欠 ' + state.unpaidDays + ' 日（逃兵中）' : '军饷：' + state.payNeed + ' 钱/日 · 已发齐', px + 12, y);
-    y += 20;
+    ctx.fillText(state.unpaidDays > 0 ? '军饷：欠' + state.unpaidDays + '日（逃兵中）' : '军饷：' + state.payNeed + '钱/日·已发齐', px + 12, y); y += 18;
     ctx.fillStyle = '#8a7c5e';
     ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop'), px + 12, y);
-    const canTrain = n < cap && idlePop() > 0;
-    drawButton(px + 10, py + ph - 66, 56, 24, '− 退训', false, function () { removeTrainee(b); }, n <= 0);
-    drawButton(px + 70, py + ph - 66, 56, 24, '+步兵', false, function () { sendTrainee(b, 'melee'); }, !canTrain);
-    drawButton(px + 130, py + ph - 66, 56, 24, '+弓兵', false, function () { sendTrainee(b, 'archer'); }, !canTrain);
-    drawButton(px + 190, py + ph - 66, 56, 24, '+工兵', false, function () { sendTrainee(b, 'engineer'); }, !canTrain);
-    drawButton(px + 10, py + ph - 36, 236, 24, '提前出营（按已训天数折算熟练度）', false, function () { rushConscript(b); }, n <= 0);
+    drawButton(px + 10, py + ph - 34, 236, 24, '提前出营（全部在训按已训天数折算熟练度）', false, function () { rushConscript(b); }, b.queue.length <= 0);
     return;
   }
   if (b.type === 'workshop') {
