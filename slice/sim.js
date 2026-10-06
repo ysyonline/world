@@ -559,7 +559,8 @@ dailySettlers.push(function waves(day) {
     state.waveFired[i] = true;
     if (w.siege) {
       pushLog('【总攻】匈奴主力压境！多门齐攻或猛攻一门，方向不明！');
-      beginAssault(w);
+      armBattle(0);                 // 实时战斗层：总攻已至 → 视角推近、可进战场（第 3 步）
+      beginAssault(w);              // 回合制结算照旧（实时战斗与经营结算的接管 = 第 4 步）
     } else {
       pushLog('【' + w.label + '】匈奴 ' + w.size + ' 骑犯边，在城外游弋劫掠！');
       state.enemies.push({ seg: null, n: w.size, siege: false, raid: true });
@@ -1091,7 +1092,61 @@ function answerDecision(choice) {
   if (!state.pendingDecision && !state.battleReport && state.pendingCaptives <= 0 && !state.gameOver) state.paused = false;
 }
 
+// ============================ 实时战斗层接入（08 §6 第 3 步） ============================
+// 边界：第 3 步只做「快照直通」——经营侧的兵员/熟练度映射成战斗单位，战斗结果**不回写**
+//       （回写、声望结算、俘虏折算 = 08 §6 第 4 步「接口结算」，不提前做）。
+function battleSnapshot() {
+  const pool = { melee: [], archer: [], engineer: [] };
+  state.troops.forEach(function (t) { if (pool[t.type]) pool[t.type].push(t); });
+  const avgProf = function (arr, dft) {
+    return arr.length ? Math.round(arr.reduce(function (s, t) { return s + t.prof; }, 0) / arr.length) : dft;
+  };
+  // 编制系数：以 55 兵（15+15+15+10）为满编基准，±倍率钳在 [0.4, 1.6]
+  const k = Math.max(0.4, Math.min(1.6, state.troops.length / 55));
+  return Battle.RTS_CONFIG.player.teams.map(function (base) {
+    const arr = base.type === 'melee' ? pool.melee : (base.type === 'archer' ? pool.archer : pool.engineer);
+    const n = Math.max(3, Math.round((base.type === 'engineer' ? 10 : 15) * k));
+    return { id: base.id, n: n, prof: avgProf(arr, base.prof) };
+  });
+}
+function enterBattle(focusSeg) {
+  state.live.active = true;
+  state.live.result = null;
+  state.live.focusSeg = focusSeg === undefined ? 0 : focusSeg;
+  state.live.pendingCam = true; // 让主循环推近一次（推近后玩家可自由 Z/X，不再强制）
+  Battle.reset((state.day * 7919 + 20261005) % 2147483647);
+  battleSnapshot().forEach(function (sn) { // 快照直通：覆盖默认编制（人数/熟练度来自经营）
+    const t = Battle.S.teams[sn.id];
+    if (!t) return;
+    t.n = sn.n; t.maxN = sn.n; t.prof = sn.prof;
+  });
+  pushLog('【战场】进入实时守城——空格暂停（仍可下令） · 1~4 技能 · 右键移动 · Esc 返回经营');
+}
+function exitBattle() {
+  const S = Battle.S;
+  state.live.active = false;
+  state.live.result = S.gameOver
+    ? { win: S.gameOver.win, reason: S.gameOver.reason, ops: S.ops, kills: Object.assign({}, S.killsByType) }
+    : null;
+  pushLog(state.live.result
+    ? '【战场结束】' + (state.live.result.win ? '击退总攻' : state.live.result.reason) + '（有效操作 ' + S.ops + ' · 第 3 步不回写经营）'
+    : '退出战场（未分胜负）');
+  state.paused = true; // 回到经营时先停住，让玩家消化战况
+}
+function armBattle(focusSeg) { // 总攻已至：标记可进战场（相机由 ui 主循环推近一次）
+  state.live.armed = true;
+  state.live.focusSeg = focusSeg === undefined ? 0 : focusSeg;
+}
+
 function advanceClock(dtRealSec) {
+  if (state.live.active) { // 战斗模式：经营时钟停摆，只推进实时战斗（暂停由 Battle.S.paused 管）
+    if (state.gameOver) return;
+    const speed = CONFIG.speeds[state.speedIdx];
+    let left = dtRealSec * speed;
+    while (left > 0 && !Battle.S.gameOver) { const d = Math.min(0.1, left); Battle.step(d); left -= d; }
+    if (Battle.S.gameOver && !state.live.result) exitBattle();
+    return;
+  }
   if (state.paused || state.gameOver) return;
   const speed = CONFIG.speeds[state.speedIdx];
   let dtGame = dtRealSec * speed;

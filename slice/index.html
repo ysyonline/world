@@ -28,15 +28,17 @@
  *   config.js  配置层：全部可调数值，唯一调参入口
  *   state.js   状态层：state 容器、账本、存档、资源读写
  *   sim.js     逻辑层：经营循环 + 战斗结算（零渲染依赖）
+ *   battle.js  战斗层：总攻期实时战斗（08 §6 第 3 步从 rts.html 移植，IIFE 封装只暴露 Battle）
  *   render.js  渲染层：Canvas 绘制（零状态变更）
  *   ui.js      交互层：输入事件 + 主循环
- * 加载顺序即依赖顺序：config → state → sim → render → ui。
+ * 加载顺序即依赖顺序：config → state → sim → battle → render → ui。
  * 架构约定：CONFIG 集中调参；dailySettlers 日结管线；tickWorld 秒级实时（产出/运输）；
  *      render*() 分区绘制；AUTO 供无头回归自动应答决策点。
  * ==========================================================================-->
 <script src="config.js"></script>
 <script src="state.js"></script>
 <script src="sim.js"></script>
+<script src="battle.js"></script>
 <script src="render.js"></script>
 <script src="ui.js"></script>
 </body>

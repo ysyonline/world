@@ -844,10 +844,212 @@ function renderPauseOverlay() {
   ctx.fillText('已 暂 停（空格 / 按钮继续）', W / 2, H / 2);
 }
 
+// ============================ 战斗层渲染（08 §6 第 3 步：rts.html 战斗核心搬进合图） ============================
+// 约定：只读 Battle.S / Battle.RTS_CONFIG，不写任何战斗状态。
+// 单位画在世界层（随相机缩放，战斗档推近后自然变大）；文字一律走 worldText（回屏幕坐标），
+// 保证全景档（×0.81）与战斗档（×1.4）下字号恒定不糊。
+const BCOL = Battle.COLORS, BTCOL = Battle.TEAM_COLORS;
+function skillCdText(name) {
+  const sel = Battle.selTeams();
+  if (!sel.length) return '—';
+  if (name === '齐射') { const t = sel.filter(function (x) { return x.type === 'archer'; })[0]; return t ? (t.volleyCd > 0 ? Math.ceil(t.volleyCd) + 's' : '就绪') : '需弓兵'; }
+  if (name === '檑木') { const t = sel.filter(function (x) { return x.onWall && (x.type === 'engineer' || x.type === 'melee'); })[0]; return t ? (t.logCd > 0 ? Math.ceil(t.logCd) + 's' : '就绪') : '需城头'; }
+  if (name === '火油') { const t = sel.filter(function (x) { return x.type === 'engineer' && x.onWall; })[0]; return t ? (t.oilCd > 0 ? Math.ceil(t.oilCd) + 's' : '就绪') : '需工兵城头'; }
+  if (name === '修门') { const t = sel.filter(function (x) { return x.type === 'engineer'; })[0]; return t ? (t.repairCd > 0 ? Math.ceil(t.repairCd) + 's' : '就绪') : '需工兵'; }
+  return '';
+}
+function renderBattleUnits() {
+  const S = Battle.S;
+  drawWorld(function () {
+    // 城门（战斗态）：破门画叉，未破画血条——以战斗层为准（第 3 步结算不回写经营层的 state.gateHp）
+    Battle.GATES.forEach(function (g) {
+      if (g.broken) {
+        ctx.strokeStyle = '#e06a5a'; ctx.lineWidth = 3 / camera.zoom;
+        ctx.beginPath();
+        ctx.moveTo(g.x - g.w / 2, g.y - 12); ctx.lineTo(g.x + g.w / 2, g.y + 12);
+        ctx.moveTo(g.x + g.w / 2, g.y - 12); ctx.lineTo(g.x - g.w / 2, g.y + 12);
+        ctx.stroke();
+      } else {
+        const by = g.y + (g.side === 'north' ? -MAP.wallThick - 9 : MAP.wallThick + 4);
+        ctx.fillStyle = '#17130e'; ctx.fillRect(g.x - g.w / 2, by, g.w, 4);
+        const f = Math.max(0, g.hp / g.maxHp);
+        ctx.fillStyle = f > 0.5 ? '#8ad08a' : f > 0.25 ? '#d8c25a' : '#e06a5a';
+        ctx.fillRect(g.x - g.w / 2, by, g.w * f, 4);
+      }
+    });
+    // 特效底层（光环 / 弹道）
+    S.fx.forEach(function (f) {
+      const a = 1 - f.t / f.dur;
+      if (f.type === 'ring') {
+        ctx.strokeStyle = f.color; ctx.globalAlpha = a; ctx.lineWidth = 2 / camera.zoom;
+        ctx.beginPath(); ctx.arc(f.x, f.y, f.r * (0.4 + 0.6 * (1 - a)), 0, Math.PI * 2); ctx.stroke();
+      } else if (f.type === 'beam') {
+        ctx.strokeStyle = f.color; ctx.globalAlpha = a; ctx.lineWidth = (f.w || 1) * 1.5 / camera.zoom;
+        ctx.beginPath(); ctx.moveTo(f.x1, f.y1); ctx.lineTo(f.x2, f.y2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    });
+    // 敌军（形状=兵种：三角游骑/菱铁骑/方先登/长条冲车/井阑）
+    S.enemies.forEach(function (e) {
+      const col = BCOL[e.squad] || '#c8b88a';
+      const s = (e.kind === 'ram' || e.kind === 'tower') ? 11 : 7;
+      ctx.save(); ctx.translate(e.x, e.y);
+      if (e.state === 'ambush') ctx.globalAlpha = 0.35;
+      ctx.fillStyle = col; ctx.strokeStyle = '#0e0b08'; ctx.lineWidth = 1.5 / camera.zoom;
+      if (e.kind === 'rider' || e.kind === 'arbalest') {
+        ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.9, s * 0.7); ctx.lineTo(-s * 0.9, s * 0.7); ctx.closePath(); ctx.fill(); ctx.stroke();
+        if (e.kind === 'arbalest') { ctx.strokeStyle = '#12303a'; ctx.beginPath(); ctx.moveTo(-s, 0); ctx.lineTo(s, 0); ctx.stroke(); }
+      } else if (e.kind === 'iron') {
+        ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.8, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.8, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      } else if (e.kind === 'vanguard') {
+        ctx.fillRect(-s / 2, -s / 2, s, s); ctx.strokeRect(-s / 2, -s / 2, s, s);
+      } else if (e.kind === 'ram') {
+        ctx.fillRect(-s, -4, s * 2, 8); ctx.strokeRect(-s, -4, s * 2, 8);
+      } else if (e.kind === 'tower') {
+        ctx.fillRect(-6, -11, 12, 19); ctx.strokeRect(-6, -11, 12, 19);
+      }
+      if (e.burning > 0) { ctx.fillStyle = '#ff7a3c'; ctx.globalAlpha = 0.7; ctx.beginPath(); ctx.arc(0, -s - 4, 4, 0, Math.PI * 2); ctx.fill(); }
+      ctx.globalAlpha = 1;
+      if (e.state === 'climb') { ctx.strokeStyle = '#b8a284'; ctx.lineWidth = 2 / camera.zoom; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -20); ctx.stroke(); }
+      ctx.restore();
+      if (e.hp < e.maxHp) { // 血条走屏幕坐标：世界坐标下 3px 在全景档会糊成一条线
+        const p = worldToScreen(e.x, e.y - s - 9);
+        if (inView(p.x, p.y)) {
+          ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.fillStyle = '#3a2f22'; ctx.fillRect(p.x - 8, p.y, 16, 3);
+          ctx.fillStyle = '#e06a5a'; ctx.fillRect(p.x - 8, p.y, 16 * Math.max(0, e.hp / e.maxHp), 3);
+          ctx.restore();
+        }
+      }
+    });
+    // 我军（菱形 + 人数 + 兵种字）
+    S.teams.forEach(function (t) {
+      if (t.dead) return;
+      const col = BTCOL[t.type], sel = Battle.isSelected(t.id);
+      ctx.save(); ctx.translate(t.x, t.y);
+      ctx.fillStyle = col; ctx.strokeStyle = sel ? '#ffd24a' : '#0e0b08'; ctx.lineWidth = (sel ? 2.4 : 1.5) / camera.zoom;
+      ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(7.2, 0); ctx.lineTo(0, 9); ctx.lineTo(-7.2, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      worldText(String(t.n), t.x, t.y + 1, 10, '#14100b');
+      worldText(t.type === 'melee' ? '步' : t.type === 'archer' ? '弓' : '工', t.x, t.y - 14, 10, col);
+      if (t.onWall) worldText('城头', t.x, t.y - 26, 9, '#d8cfb8');
+      if (t.busy > 0 && t.busyKind === 'repair') worldText('修…', t.x, t.y + 16, 9, '#8ad08a');
+    });
+    // 特效顶层（飘字）
+    S.fx.forEach(function (f) {
+      if (f.type !== 'text') return;
+      ctx.globalAlpha = 1 - f.t / f.dur;
+      worldText(f.text, f.x, f.y - f.t * 18, 12, f.color || '#ffd8a0');
+      ctx.globalAlpha = 1;
+    });
+  });
+}
+function renderBattlePanel() {
+  const px = 1010, py = 70, pw = 256;
+  const S = Battle.S, RC = Battle.RTS_CONFIG;
+  panel(px, py, pw, 52, '战 况');
+  ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#c9bd9e';
+  ctx.fillText((S.paused ? '⏸ 暂停（仍可下令）' : '▶ ×' + RC.speeds[S.speedIdx]) + '   ' + Math.floor(S.t) + 's', px + 12, py + 30);
+  ctx.fillStyle = '#8a7c5e';
+  ctx.fillText('敌 ' + S.enemies.length + '   涌城 ' + S.insideEnemies.size + '/' + RC.ai.floodInsideLose + '   操作 ' + S.ops, px + 12, py + 46);
+  // 两门血条
+  Battle.GATES.forEach(function (g, i) {
+    const y = py + 60 + i * 24;
+    ctx.fillStyle = '#8a7c5e'; ctx.font = '12px sans-serif';
+    ctx.fillText(g.label, px + 12, y + 8);
+    ctx.fillStyle = '#3a2f22'; ctx.fillRect(px + 58, y + 2, 174, 8);
+    const f = Math.max(0, g.hp / g.maxHp);
+    ctx.fillStyle = g.broken ? '#e06a5a' : (f > 0.4 ? '#8ad08a' : '#d8c25a');
+    ctx.fillRect(px + 58, y + 2, 174 * f, 8);
+  });
+  // 部队卡（点击选中）
+  let y = py + 116;
+  panel(px, y, pw, 32 + S.teams.length * 44, '部 队');
+  S.teams.forEach(function (t, i) {
+    const cy = y + 28 + i * 44, sel = Battle.isSelected(t.id);
+    buttons.push({ x: px + 8, y: cy, w: pw - 16, h: 40, label: '', action: function () { Battle.select([t.id]); } });
+    ctx.fillStyle = sel ? 'rgba(255,210,74,0.18)' : 'rgba(60,50,36,0.6)';
+    ctx.fillRect(px + 8, cy, pw - 16, 40);
+    ctx.strokeStyle = sel ? '#ffd24a' : '#4a4030'; ctx.lineWidth = 1;
+    ctx.strokeRect(px + 8.5, cy + 0.5, pw - 17, 39);
+    ctx.fillStyle = t.dead ? '#6a6050' : BTCOL[t.type];
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(t.label, px + 18, cy + 14);
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#d8cfb8';
+    ctx.fillText(t.dead ? '覆没' : t.n + '/' + t.maxN + ' 熟' + t.prof + (t.onWall ? ' 城头' : '') + (t.busy > 0 ? ' 忙' : ''), px + 18, cy + 30);
+  });
+  y += 32 + S.teams.length * 44 + 12;
+  // 指令钮（1~4 键同效）
+  panel(px, y, pw, 112, '指 令');
+  const skills = [['1 齐射', 'volley'], ['2 檑木', 'log'], ['3 火油', 'oil'], ['4 修门', 'repair']];
+  skills.forEach(function (s, i) {
+    const bx = px + 8 + (i % 2) * 122, by = y + 28 + Math.floor(i / 2) * 40;
+    drawButton(bx, by, 116, 34, s[0], false, function () { Battle.trySkill(s[1], S.mouse.x, S.mouse.y); });
+  });
+  y += 124;
+  ctx.textAlign = 'left'; ctx.font = '11px sans-serif'; ctx.fillStyle = '#7a6f58';
+  ['左键点部队 / 拖框选 · 右键下令', '点墙线 = 上墙驻防', '空格暂停（暂停中仍可下令）', 'F 变速 · Z 视角 · X 换聚焦方向'].forEach(function (t, i) {
+    ctx.fillText(t, px + 12, y + 8 + i * 16);
+  });
+}
+function renderBattleBanners() {
+  const S = Battle.S;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  S.banners.forEach(function (b, i) {
+    ctx.font = 'bold 13px sans-serif';
+    const w = ctx.measureText(b.text).width + 24;
+    ctx.fillStyle = 'rgba(10,8,6,0.78)';
+    ctx.fillRect(VIEW.x + VIEW.w / 2 - w / 2, VIEW.y + 6 + i * 24, w, 20);
+    ctx.fillStyle = '#ffe9b8';
+    ctx.fillText(b.text, VIEW.x + VIEW.w / 2, VIEW.y + 16 + i * 24);
+  });
+}
+function renderBattleEnd() {
+  const S = Battle.S;
+  if (!S.gameOver) return;
+  const w = 520, h = 296, x = W / 2 - w / 2, y = 118;
+  ctx.fillStyle = 'rgba(10,8,6,0.96)'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = S.gameOver.win ? '#8ad08a' : '#e06a5a'; ctx.lineWidth = 2;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 22px sans-serif'; ctx.fillStyle = S.gameOver.win ? '#8ad08a' : '#e06a5a';
+  ctx.fillText(S.gameOver.win ? '—— 击退总攻 ——' : '—— 城陷 ——', W / 2, y + 34);
+  ctx.font = '13px sans-serif'; ctx.fillStyle = '#d8cfb8';
+  ctx.fillText(S.gameOver.reason, W / 2, y + 62);
+  ctx.fillText(S.gameOver.detail, W / 2, y + 84);
+  const K = S.killsByType, total = K.archer + K.melee + K.xbow + K.log + K.oil;
+  const lines = [
+    ['有效操作', S.ops + ' 次（指标 ≥' + Battle.RTS_CONFIG.metrics.minEffectiveOps + '）'],
+    ['总击杀', String(total)],
+    ['弓 / 弩 / 檑木 / 火油', K.archer + ' / ' + K.xbow + ' / ' + K.log + ' / ' + K.oil],
+    ['齐射使用', S.volleyUses + ' 次'],
+    ['出城机动', S.sortieMoves + ' 次'],
+    ['破门', S.brokenGates.map(function (g) { return g.label; }).join('、') || '无'],
+  ];
+  ctx.textAlign = 'left'; ctx.font = '12px sans-serif';
+  lines.forEach(function (l, i) {
+    ctx.fillStyle = '#8a7f66'; ctx.fillText(l[0], x + 40, y + 120 + i * 24);
+    ctx.fillStyle = '#d8cfb8'; ctx.fillText(l[1], x + 190, y + 120 + i * 24);
+  });
+  ctx.textAlign = 'center'; ctx.fillStyle = '#8a7f66'; ctx.font = '12px sans-serif';
+  ctx.fillText('按 Esc 返回经营（第 3 步：结算不回写）', W / 2, y + h - 18);
+}
+
 function render() {
   buttons.length = 0;
   ctx.clearRect(0, 0, W, H);
   renderScene();
+  if (state.live && state.live.active) { // 战斗模式：经营面板让位给战斗面板
+    renderBattleUnits();
+    renderBattlePanel();
+    renderBattleBanners();
+    renderHUD();
+    renderLog();
+    renderBattleEnd();
+    renderPauseOverlay();
+    return;
+  }
   renderGridZone('out');
   renderGridZone('in');
   renderPalette();

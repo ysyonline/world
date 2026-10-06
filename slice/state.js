@@ -28,6 +28,9 @@ const state = {
   grainNeed: CONFIG.start.pop * CONFIG.grainPerCapita,
   troops: [],            // {prof:0~100, seg:null|0~3, type:'melee'|'archer'|'engineer'}
   unpaidDays: 0,
+  // 实时战斗层（08 §6 第 3 步）：armed=总攻已至（可进战场）/ active=正在实时战斗中
+  // 第 3 步只做「快照直通」——经营数值映射进战斗单位，战斗结果**不回写**（回写是第 4 步接口结算）
+  live: { armed: false, active: false, focusSeg: 0, result: null },
   payNeed: 0,
   deserters: 0,
   selectedSeg: null,

@@ -99,6 +99,62 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(60);
   ok(await page.evaluate(() => camera.mode === 'overview'), 'Z 回到全景档');
 
+  // ⑦ 战斗层实跑（08 §6 第 3 步）：进入战场 → 面板 → 点选部队 → 右键上墙 → 暂停 → Esc 退出
+  const binfo = await page.evaluate(() => ({
+    hasBattle: typeof Battle !== 'undefined',
+    gates: typeof Battle !== 'undefined' ? Battle.GATES.map(g => g.label + ':' + g.side) : [],
+    teams: typeof Battle !== 'undefined' ? Battle.S.teams.length : 0,
+  }));
+  ok(binfo.hasBattle && binfo.teams === 4 && binfo.gates.length === 2, '战斗层就绪（' + binfo.gates.join(' / ') + ' · 4 队）');
+  await page.evaluate(() => { state.live.armed = true; enterBattle(0); });
+  await page.waitForTimeout(250);
+  const bs = await page.evaluate(() => ({ active: state.live.active, mode: camera.mode, zoom: camera.zoom, labels: buttons.map(b => b.label) }));
+  ok(bs.active && bs.mode === 'battle', '进入战场：视角自动推近战斗档（zoom ' + bs.zoom.toFixed(2) + '）');
+  const skillBtns = bs.labels.filter(l => /齐射|檑木|火油|修门/.test(l));
+  ok(skillBtns.length === 4, '战斗面板指令钮齐全（' + skillBtns.join(' / ') + '）');
+  const bpx = await page.evaluate(() => {
+    const c = document.getElementById('game'), g = c.getContext('2d');
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let n = 0, tot = 0;
+    for (let i = 0; i < d.length; i += 4 * 37) { tot++; if (d[i + 3] > 8) n++; }
+    return n / tot;
+  });
+  ok(bpx > 0.9, '战场画面非空白（非透明像素 ' + (bpx * 100).toFixed(1) + '%）');
+  // 点部队卡选中（队伍卡无文字标签，label 为空串）
+  const tcard = await page.evaluate(() => buttons.filter(b => b.label === '').map(b => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 }))[0]);
+  p = toScreen(tcard.x, tcard.y);
+  await page.mouse.click(p.x, p.y);
+  await page.waitForTimeout(80);
+  ok(await page.evaluate(() => Battle.S.selected.size > 0), '点击部队卡选中部队');
+  // 右键点墙线 = 上墙驻防（显式选弓兵 id=2；点**当前聚焦方向**的墙线——另一侧在战斗档下已出视口）
+  await page.evaluate(() => Battle.select([2]));
+  const wallP = await page.evaluate(() => {
+    const C = CONFIG.map.city, g = CONFIG.map.segs[camera.focusSeg];
+    return worldToScreen(C.x + C.w * 0.5, g.side === 'north' ? C.y : C.y + C.h);
+  });
+  p = toScreen(wallP.x, wallP.y);
+  await page.mouse.click(p.x, p.y, { button: 'right' });
+  await page.waitForTimeout(60);
+  await page.evaluate(() => Battle.run(8));
+  const arch = await page.evaluate(() => ({ onWall: Battle.S.teams[2].onWall, side: Battle.S.teams[2].wallSide }));
+  ok(arch.onWall, '右键点墙线 → 部队登城驻防（' + arch.side + '）');
+  // 空格暂停战斗（暂停中仍可下令，是这套 RTS 的灵魂）
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(60);
+  const pausedT = await page.evaluate(() => Battle.S.t);
+  await page.waitForTimeout(400);
+  ok(await page.evaluate(() => Battle.S.paused === true) && Math.abs(await page.evaluate(() => Battle.S.t) - pausedT) < 0.001, '空格暂停战斗且时间冻结（暂停中仍可下令）');
+  await page.keyboard.press('Space');
+  if (wantShot) {
+    await page.evaluate(() => Battle.run(30)); // 推进到有敌军在场，截图才看得出战斗
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(ROOT, 'shot-rts.png') });
+    console.log('  · 战场截图 shot-rts.png');
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  ok(await page.evaluate(() => state.live.active === false), 'Esc 退出战场回到经营');
+
   // 战斗档截图（给用户过眼）
   if (wantShot) {
     await page.keyboard.press('KeyZ');
