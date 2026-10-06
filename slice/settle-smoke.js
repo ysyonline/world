@@ -167,6 +167,27 @@ ok(rep.attrib.some(function (a) { return a.text.indexOf('【门】') === 0; }), 
 ok(rep.attrib.some(function (a) { return a.text.indexOf('【兵】') === 0; }), '⑧ 归因含【兵】→ 挂到训练/布防决策');
 ok(rep.attrib.some(function (a) { return a.text.indexOf('【械】') === 0; }), '⑧ 归因含【械】→ 挂到工匠坊产能决策');
 ok(rep.attrib[rep.attrib.length - 1].tone === 'note', '⑧ 归因链以总评句收尾');
+
+// —— C 信号机器可判部分：归因链【覆盖性】——
+// 支柱3/信号 C 的判定标准不是「链里有几条」，而是「**实际发生的每一类损失都被归到了一条**」。
+// 只列 happened=true 的类目 = 漏归因 = 玩家输了但看不到哪一环 → C 信号成立。
+// 反之链上有类目但对应损失没发生，那是噪声（虚报），同样要抓。
+section('C 信号：归因链覆盖性（漏归因 / 虚报双向检测）');
+function hasTag(rep2, tag) { return rep2.attrib.some(function (a) { return a.text.indexOf(tag) === 0; }); }
+const lostProf = rep.profGain > 0;
+const lostBuilding = rep.demolished > 0;
+ok(lostProf === hasTag(rep, '【练】'), '⑩ 熟练度变化' + (lostProf ? '发生' : '未发生') + ' → 【练】条目' + (hasTag(rep, '【练】') ? '在' : '不在') + '（无虚报/无漏报）');
+ok(lostBuilding === hasTag(rep, '【毁】'), '⑩ 设施损毁' + (lostBuilding ? '发生' : '未发生') + ' → 【毁】条目' + (hasTag(rep, '【毁】') ? '在' : '不在') + '（无虚报/无漏报）');
+const anyGateLoss = rep.gates.some(function (gl) { return gl.after !== gl.before; });
+ok(hasTag(rep, '【门】'), '⑩ 门条目恒在（无论损毁与否都要给玩家「门这条线没问题」的确认）');
+// 每条归因都必须指向一个可操作的量——纯陈述句（无数字/无物料名）不构成归因
+rep.attrib.forEach(function (a, i) {
+  const actionable = /[0-9]|土木|檑木|火油|工匠坊|熟练度|布防|训练/.test(a.text);
+  ok(actionable, '⑩ 归因[' + i + '] 指向可操作量：' + a.text.slice(0, 28) + '…');
+});
+// 总评句必须给出「下次怎么做」而非只描述现象
+const verdict = rep.attrib[rep.attrib.length - 1].text;
+ok(/下次|把|留|压到|拉长|备足/.test(verdict), '⑩ 总评句含行动建议（下次…）');
 ok(rep.win === true, '满编 + 合理操作应能守住（兵不够/不操作就是输——支柱 3 的因果链方向正确）');
 
 ok(enterBattle(0) === false && state.live.active === false, '⑨ 结算后禁止再进战场（防反复重开刷结果）');
