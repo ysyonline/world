@@ -521,7 +521,7 @@ function withdrawGear(s, kind) {
 }
 // 修城门：土20木5 一次修满（用户定：土多木少）
 function repairGate(seg) {
-  if (state.gateHp[seg] >= CONFIG.gateMaxHp) { pushLog('城门完好'); return false; }
+  if (state.gateHp[seg] >= gateMaxOf(seg)) { pushLog('城门完好'); return false; }
   if (getRes('soil') < CONFIG.gateRepairSoil) { pushLog('修门需土 ' + CONFIG.gateRepairSoil + '，不足'); return false; }
   if (getRes('wood') < CONFIG.gateRepairWood) { pushLog('修门需木 ' + CONFIG.gateRepairWood + '，不足'); return false; }
   LEDGER_SRC = '修门';
@@ -559,8 +559,11 @@ dailySettlers.push(function waves(day) {
     state.waveFired[i] = true;
     if (w.siege) {
       pushLog('【总攻】匈奴主力压境！多门齐攻或猛攻一门，方向不明！');
-      armBattle(0);                 // 实时战斗层：总攻已至 → 视角推近、可进战场（第 3 步）
-      beginAssault(w);              // 回合制结算照旧（实时战斗与经营结算的接管 = 第 4 步）
+      state.live.waveSize = w.size;
+      // 第 4 步：实时战斗接管总攻（进战场即自动推近相机）；turnbased = 委托将领结算，
+      // 供无头回归（playtest/trace）与「不想微操」的路径使用，两条路共用同一套回写口径。
+      if (CONFIG.assaultMode === 'live') enterBattle(0);
+      else beginAssault(w);
     } else {
       pushLog('【' + w.label + '】匈奴 ' + w.size + ' 骑犯边，在城外游弋劫掠！');
       state.enemies.push({ seg: null, n: w.size, siege: false, raid: true });
@@ -1092,9 +1095,60 @@ function answerDecision(choice) {
   if (!state.pendingDecision && !state.battleReport && state.pendingCaptives <= 0 && !state.gameOver) state.paused = false;
 }
 
-// ============================ 实时战斗层接入（08 §6 第 3 步） ============================
-// 边界：第 3 步只做「快照直通」——经营侧的兵员/熟练度映射成战斗单位，战斗结果**不回写**
-//       （回写、声望结算、俘虏折算 = 08 §6 第 4 步「接口结算」，不提前做）。
+// ============================ 实时战斗层接入（08 §6 第 4 步：接口结算） ============================
+// 接口方向 ①经营→战斗（战前快照）：兵员/熟练度/门耐久/重弩架数；
+//         ②战斗→经营（战后回写）：伤亡(永久人口)/熟练度/声望/门耐久/器械消耗/设施损毁/战利品。
+// 纪律：每个换算都要能回答「凭什么」——折算比例、声望口径、材料价一律进 CONFIG，不埋在逻辑里。
+// 对账断言见 settle-smoke.js（信号 A：快照→战斗→回写全程守恒）。
+function gateMaxOf(seg) { // 门耐久上限按段取：便门 9 < 正门 12（02 §3.1 定案）
+  const s = CONFIG.map.segs[seg];
+  return (s && s.maxHp) || CONFIG.gateMaxHp;
+}
+function killTroopsOfType(type, n) { // 战死=永久减人口；熟练度最低者先死（与 killSegTroop 同口径）
+  for (let i = 0; i < n; i++) {
+    let mi = -1;
+    state.troops.forEach(function (t, j) { if (t.type !== type) return; if (mi < 0 || t.prof < state.troops[mi].prof) mi = j; });
+    if (mi < 0) return;
+    state.troops.splice(mi, 1);
+    state.res.soldiers -= 1;   // 直接改计数：setRes('soldiers') 会补新兵，绕开
+    addRes('pop', -1);
+  }
+}
+function takeEconSnapshot(waveSize) { // 战前快照：对账基准 + 战后归因链素材
+  const byType = { melee: 0, archer: 0, engineer: 0 };
+  state.troops.forEach(function (t) { byType[t.type] = (byType[t.type] || 0) + 1; });
+  const teamMax = { melee: 0, archer: 0, engineer: 0 };
+  battleSnapshot().forEach(function (sn) { // 战斗编队人数 = 折算分母（甲/乙两步兵合并计）
+    teamMax[Battle.RTS_CONFIG.player.teams[sn.id].type] += sn.n;
+  });
+  let ps = 0;
+  state.troops.forEach(function (t) { ps += t.prof; });
+  let inB = 0;
+  eachBuilding(function (b, zone) { if (zone === 'in') inB++; });
+  return {
+    day: state.day, enemySize: waveSize || 0,
+    pop: getRes('pop'), soldiers: getRes('soldiers'), prestige: getRes('prestige'),
+    res: { grain: getRes('grain'), wood: getRes('wood'), soil: getRes('soil'), iron: getRes('iron'), money: getRes('money') },
+    troops: byType, teamMax: teamMax,
+    profAvg: state.troops.length ? Math.round(ps / state.troops.length) : 0,
+    gateHp: state.gateHp.slice(), inv: Object.assign({}, state.inv),
+    deployed: { log: state.segLogs.reduce(function (a, b) { return a + b; }, 0),
+      oil: state.segOil.reduce(function (a, b) { return a + b; }, 0),
+      xbow: state.segXbow.reduce(function (a, b) { return a + b; }, 0) },
+    inBuildings: inB,
+  };
+}
+function demolishRandomInCity() { // 入城敌波及：焚毁一座城内建筑（仓豁免——与夜赌失火同口径）
+  const list = [];
+  eachBuilding(function (b, zone, r, c) {
+    if (zone === 'in' && b.type !== 'granary' && b.type !== 'depot') list.push({ r: r, c: c, type: b.type });
+  });
+  if (!list.length) return false;
+  const it = list[Math.floor(rand() * list.length)];
+  state.inGrid[it.r][it.c] = null;
+  pushLog('【城破波及】' + CONFIG.buildings[it.type].label + ' 被入城胡骑焚毁');
+  return true;
+}
 function battleSnapshot() {
   const pool = { melee: [], archer: [], engineer: [] };
   state.troops.forEach(function (t) { if (pool[t.type]) pool[t.type].push(t); });
@@ -1109,18 +1163,71 @@ function battleSnapshot() {
     return { id: base.id, n: n, prof: avgProf(arr, base.prof) };
   });
 }
+// 战中技能走经营库存，不是战斗层的免费技能——檑木/火油扣**该墙段已部署**的存货，
+// 修门扣土木。设计意图：备战时「器械放哪一段」会在开战后兑现成"哪一段才有得砸"（支柱 3）。
+function skillWallSeg() { // 选中部队所在的墙段（器械从该段扣）
+  const sel = Battle.S.teams.filter(function (t) { return !t.dead && Battle.isSelected(t.id) && t.onWall; });
+  if (!sel.length) return null;
+  const t = sel[0];
+  const wy = t.wallSide === 'north' ? MAP.city.y : MAP.city.y + MAP.city.h;
+  return wallSegAt(t.x, wy);
+}
+function useBattleSkill(kind, x, y) {
+  if (!state.live.active || !state.live.skillUse) return false; // 只在战斗中生效，经营期调用无效
+  if (kind === 'volley') return Battle.trySkill('volley', x, y); // 齐射是战术不是物资（装填真空已是代价）
+  if (kind === 'log' || kind === 'oil') {
+    const seg = skillWallSeg();
+    if (seg === null) { pushLog((kind === 'log' ? '檑木' : '火油') + '需选中**城头部队**才能投放'); return false; }
+    const arr = kind === 'log' ? state.segLogs : state.segOil;
+    if (arr[seg] <= 0) {
+      pushLog((kind === 'log' ? '檑木' : '火油') + '已用尽——' + CONFIG.wall.segNames[seg] + '段无存（备战时把器械放对段）');
+      return false;
+    }
+    if (!Battle.trySkill(kind, x, y)) return false; // 冷却/条件不满足：不扣库存
+    arr[seg] -= 1;
+    state.live.skillUse[kind] += 1;
+    pushLog('【' + (kind === 'log' ? '檑木' : '火油') + '】' + CONFIG.wall.segNames[seg] + '段投放（余 ' + arr[seg] + '）');
+    return true;
+  }
+  if (kind === 'repair') {
+    if (getRes('soil') < CONFIG.gateRepairSoil || getRes('wood') < CONFIG.gateRepairWood) {
+      pushLog('抢修需土' + CONFIG.gateRepairSoil + ' 木' + CONFIG.gateRepairWood + '，材料不足');
+      return false;
+    }
+    if (!Battle.trySkill('repair', x, y)) return false;
+    LEDGER_SRC = '修门';
+    addRes('soil', -CONFIG.gateRepairSoil);
+    addRes('wood', -CONFIG.gateRepairWood);
+    LEDGER_SRC = null;
+    state.live.skillUse.repair += 1;
+    pushLog('【抢修】城门加固（土-' + CONFIG.gateRepairSoil + ' 木-' + CONFIG.gateRepairWood + '）');
+    return true;
+  }
+  return false;
+}
 function enterBattle(focusSeg) {
+  if (state.live.settled) { pushLog('总攻已结算，战事不可重来（败局面板可读档重打）'); return false; } // 防刷新结果
+  state.live.pre = takeEconSnapshot(state.live.waveSize); // 战前快照：对账基准 + 归因链素材
   state.live.active = true;
   state.live.result = null;
+  state.live.skillUse = { log: 0, oil: 0, repair: 0 };
   state.live.focusSeg = focusSeg === undefined ? 0 : focusSeg;
   state.live.pendingCam = true; // 让主循环推近一次（推近后玩家可自由 Z/X，不再强制）
+  state.paused = true;          // 经营时钟停摆（战斗期冻结，08 §3）
   Battle.reset((state.day * 7919 + 20261005) % 2147483647);
-  battleSnapshot().forEach(function (sn) { // 快照直通：覆盖默认编制（人数/熟练度来自经营）
+  battleSnapshot().forEach(function (sn) { // ① 兵员/熟练度：快照直通（人数/熟练度来自经营）
     const t = Battle.S.teams[sn.id];
     if (!t) return;
     t.n = sn.n; t.maxN = sn.n; t.prof = sn.prof;
   });
-  pushLog('【战场】进入实时守城——空格暂停（仍可下令） · 1~4 技能 · 右键移动 · Esc 返回经营');
+  Battle.GATES.forEach(function (g) { // ② 门耐久：经营 → 战斗（备战期攒的门血带进战场）
+    const hp = Math.max(0, Math.min(g.maxHp, state.gateHp[g.seg]));
+    g.hp = hp; g.broken = hp <= 0;
+    if (g.broken && Battle.S.brokenGates.indexOf(g) < 0) Battle.S.brokenGates.push(g);
+  });
+  Battle.RTS_CONFIG.player.xbows = Math.max(1, state.live.pre.deployed.xbow); // ③ 重弩架数=已部署数（布防后果）
+  Battle.setPaused(true); // 开战前先停：看清局势再开打（暂停中可下令——02 定调）
+  pushLog('【战场】总攻已至——空格开战（暂停中仍可下令） · 1~4 技能 · 右键移动 · 点墙线上墙');
 }
 function exitBattle() {
   const S = Battle.S;
@@ -1128,14 +1235,138 @@ function exitBattle() {
   state.live.result = S.gameOver
     ? { win: S.gameOver.win, reason: S.gameOver.reason, ops: S.ops, kills: Object.assign({}, S.killsByType) }
     : null;
-  pushLog(state.live.result
-    ? '【战场结束】' + (state.live.result.win ? '击退总攻' : state.live.result.reason) + '（有效操作 ' + S.ops + ' · 第 3 步不回写经营）'
-    : '退出战场（未分胜负）');
+  if (S.gameOver) { settleLiveBattle(); state.live.settled = true; } // 第 4 步：战斗 → 经营回写 + 锁死重打
+  else pushLog('退出战场（未分胜负——总攻未决不可撤离）');
   state.paused = true; // 回到经营时先停住，让玩家消化战况
 }
-function armBattle(focusSeg) { // 总攻已至：标记可进战场（相机由 ui 主循环推近一次）
+function armBattle(focusSeg) { // 兼容入口（第 3 步 B 键）：标记可进战场（相机由 ui 主循环推近一次）
   state.live.armed = true;
   state.live.focusSeg = focusSeg === undefined ? 0 : focusSeg;
+}
+
+// ============================ 战后回写（08 §4.2 战斗 → 经营） ============================
+// 顺序：门耐久 → 伤亡 → 熟练度 → 设施损毁 → 声望/俘虏/战利品 → 战报+归因链 → 胜负判定。
+// 守恒要求（信号 A）：回写后 pop/soldiers 的减少必须等于战报里的殉国数；门耐久等于战斗层 GATES；
+// 物资变动只来自「战中消耗」（修门材料），其余一项不动。settle-smoke.js 逐条断言。
+function settleLiveBattle() {
+  const S = Battle.S, pre = state.live.pre || takeEconSnapshot(0);
+  const use = state.live.skillUse || { log: 0, oil: 0, repair: 0 };
+  const win = !!(S.gameOver && S.gameOver.win);
+  let kills = 0;
+  Object.keys(S.killsByType).forEach(function (k) { kills += S.killsByType[k] || 0; });
+
+  // ① 门耐久：战斗层是门血的唯一真相源（修门账单由玩家次日自行支付，不代扣）
+  const gateLines = [];
+  Battle.GATES.forEach(function (g) {
+    const before = pre.gateHp[g.seg];
+    const after = g.broken ? 0 : Math.max(0, Math.min(gateMaxOf(g.seg), Math.round(g.hp)));
+    state.gateHp[g.seg] = after;
+    gateLines.push({ seg: g.seg, before: before, after: after, broken: g.broken });
+  });
+  const brokenN = S.brokenGates.length;
+
+  // ② 伤亡：战斗队按兵种「死伤率」折回经营（战斗编队是经营的抽样，比例才是可迁移的量）
+  const deadByType = { melee: 0, archer: 0, engineer: 0 };
+  S.teams.forEach(function (t) { deadByType[t.type] += Math.max(0, t.maxN - t.n); });
+  const dead = {}, dt = {};
+  let deadTotal = 0;
+  Object.keys(deadByType).forEach(function (type) {
+    const pool = pre.troops[type] || 0, teamMax = pre.teamMax[type] || 0;
+    let d = teamMax > 0 ? Math.round(pool * deadByType[type] / teamMax) : 0;
+    // 有兵有伤亡 → 至少 1（否则战斗伤亡不落到经营 = 接口漂移，信号 A 直接判失败）
+    if (pool > 0 && deadByType[type] > 0) d = Math.min(pool, Math.max(1, d));
+    dt[type] = d; dead[type] = d; deadTotal += d;
+    killTroopsOfType(type, d);
+  });
+
+  // ③ 熟练度：参战存活者 +3%、杀敌按人头分摊 +0.5%（与回合制 finishSegBattle 同公式）
+  let profGain = 0;
+  if (state.troops.length > 0) {
+    profGain = CONFIG.profBattleSurvive + kills * CONFIG.profPerKill / state.troops.length;
+    state.troops.forEach(function (t) { t.prof = Math.min(100, t.prof + profGain); });
+  }
+
+  // ④ 设施损毁：入城敌波及（败局不结算——城已陷，无"重建"语境）
+  let demolished = 0;
+  if (win) {
+    for (let i = 0; i < S.peakInside; i++) if (rand() < CONFIG.invaderDemolishP && demolishRandomInCity()) demolished++;
+  }
+
+  // ⑤ 声望 / 俘虏 / 战利品
+  let prestige = 0, captives = 0, loot = 0;
+  if (win) {
+    prestige = CONFIG.assaultWinPrestige - brokenN * CONFIG.assaultGateBrokenPrestige;
+    addRes('prestige', prestige);
+    if (S.siegeCount > 0 && kills >= S.siegeCount * 0.9) { // 全歼 → 俘虏（与回合制同口径，分母取实际生成敌数）
+      captives = Math.ceil((pre.enemySize || S.siegeCount) * CONFIG.captiveRate);
+      state.pendingCaptives += captives;
+    }
+    loot = Math.round(kills * CONFIG.assaultLootPerKill); // [PLACEHOLDER·默认 0，与俘虏机制挂 EA 联动后再开]
+    if (loot > 0) { LEDGER_SRC = '战利品'; addRes('money', loot); LEDGER_SRC = null; }
+  }
+
+  // ⑥ 战报 + 归因链（支柱 3「后果可归因」的呈现载体 = 信号 C 的检测面）
+  const rep = {
+    siege: true, live: true, label: '总攻', enemySize: S.siegeCount || pre.enemySize,
+    kills: kills, dead: deadTotal, deadByType: dt, captives: captives,
+    gates: gateLines, demolished: demolished, loot: loot, prestige: prestige,
+    skillUse: Object.assign({}, use), profGain: Math.round(profGain * 10) / 10,
+    ops: S.ops, pauseRatio: (S.activeTime + S.pausedTime) > 0 ? S.pausedTime / (S.activeTime + S.pausedTime) : 0,
+    peakInside: S.peakInside, win: win,
+  };
+  rep.attrib = buildAttribution(pre, rep);
+  state.battleReport = rep;
+  state.paused = true;
+  pushLog('【' + (win ? '大捷' : '城陷') + '】' + (win ? '总攻退去' : (S.gameOver && S.gameOver.reason)) + '：歼敌 ' + kills
+    + '，殉国 ' + deadTotal + (demolished ? '，焚毁建筑 ' + demolished : '')
+    + (win ? '，声望 ' + (prestige >= 0 ? '+' : '') + prestige : ''));
+
+  // ⑦ 胜负判定（与回合制 finishSegBattle 同口径：守过总攻且声望达标才算赢）
+  if (!state.gameOver) {
+    if (win) {
+      if (getRes('prestige') >= CONFIG.winPrestige) {
+        state.gameOver = { win: true, reason: '守过总攻', detail: '塞上雄关屹立，胡骑远遁。声望 ' + getRes('prestige') + ' ≥ ' + CONFIG.winPrestige + '。' };
+      } else {
+        state.gameOver = { win: false, reason: '声望不逮', detail: '城虽守住，声望 ' + getRes('prestige') + ' < ' + CONFIG.winPrestige + '，朝廷问罪夺关。' };
+      }
+    } else {
+      state.gameOver = { win: false, reason: (S.gameOver && S.gameOver.reason) || '城陷', detail: (S.gameOver && S.gameOver.detail) || '门破涌入，关隘陷落。' };
+    }
+  }
+}
+// 归因链：每条损失都挂到一个经营决策上（否则玩家只看到"输了"，不知道输在哪——信号 C）
+function buildAttribution(pre, r) {
+  const out = [];
+  const repairs = Math.min(Math.floor(getRes('soil') / CONFIG.gateRepairSoil), Math.floor(getRes('wood') / CONFIG.gateRepairWood));
+  r.gates.forEach(function (gl) {
+    if (gl.after === gl.before) return;
+    out.push({ tone: gl.broken ? 'bad' : 'warn',
+      text: '【门】' + CONFIG.wall.segNames[gl.seg] + ' ' + gl.before + ' → ' + gl.after + (gl.broken ? '（破门！）' : '')
+        + '——现有土木够抢修 ' + repairs + ' 次（土' + CONFIG.gateRepairSoil + ' 木' + CONFIG.gateRepairWood + '/次）' });
+  });
+  if (r.gates.every(function (gl) { return gl.after === gl.before; })) {
+    out.push({ tone: 'good', text: '【门】两门无损（前门 ' + state.gateHp[0] + '/' + gateMaxOf(0) + ' · 后门 ' + state.gateHp[2] + '/' + gateMaxOf(2) + '）' });
+  }
+  const tot = (pre.troops.melee || 0) + (pre.troops.archer || 0) + (pre.troops.engineer || 0);
+  out.push({ tone: r.dead === 0 ? 'good' : (r.dead > tot * 0.25 ? 'bad' : 'warn'),
+    text: '【兵】殉国 ' + r.dead + ' 人（步' + (r.deadByType.melee || 0) + '/弓' + (r.deadByType.archer || 0) + '/工' + (r.deadByType.engineer || 0) + '）'
+      + '——战前在编 ' + tot + ' 人、平均熟练度 ' + pre.profAvg + '%' });
+  out.push({ tone: (r.skillUse.log + r.skillUse.oil) > 0 ? 'good' : 'warn',
+    text: '【械】檑木 ' + r.skillUse.log + ' · 火油 ' + r.skillUse.oil + ' · 抢修 ' + r.skillUse.repair + ' 次'
+      + '——工匠坊余存 檑木' + state.inv.log + ' 火油' + state.inv.oil + '（已上墙的才算数）' });
+  if (r.profGain > 0) out.push({ tone: 'good', text: '【练】存活 ' + state.troops.length + ' 人搏杀补熟练度 +' + r.profGain + '%' });
+  if (r.demolished > 0) out.push({ tone: 'bad', text: '【毁】入城胡骑焚毁建筑 ' + r.demolished + ' 座（城内 ' + pre.inBuildings + ' → ' + (pre.inBuildings - r.demolished) + '）' });
+  out.push({ tone: 'note', text: verdictLine(pre, r, tot) });
+  return out;
+}
+function verdictLine(pre, r, tot) {
+  if (!r.win) return '城陷归因：门破后无人堵洞——下次预备队留近战，或把檑木压到被破的那一段。';
+  if (r.gates.some(function (gl) { return gl.broken; })) {
+    return '门破而城未陷，靠的是堵门洞的血肉——下次备足土木（修门土' + CONFIG.gateRepairSoil + ' 木' + CONFIG.gateRepairWood + '）。';
+  }
+  if (tot > 0 && r.dead > tot * 0.25) return '折损过重（' + Math.round(r.dead / tot * 100) + '%）：熟练度偏低是主因，把训练周期拉长再打。';
+  if ((r.skillUse.log + r.skillUse.oil) === 0) return '全程未动用器械——工匠坊产能闲置，檑木/火油是城头最便宜的杀伤。';
+  return '城防无损：布防与器械都压住了——下一波可以更大胆。';
 }
 
 function advanceClock(dtRealSec) {

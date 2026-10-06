@@ -18,6 +18,7 @@ globalThis.requestAnimationFrame = () => {};
 
 const test = `
 // ==================== 测试环境：AUTO 自动应答 + 屏蔽日程干扰 ====================
+CONFIG.assaultMode = 'turnbased'; // 无头回归走委托结算（实时战斗路径由 settle-smoke.js 守护）
 AUTO = { curfew: false, emperor: true, gate: false, oil: true, sortie: true, block: true };
 CONFIG.waves = [];              // 波次在 W/S 专项配置，前期清空防误触发
 state.nextTaskDay = 9999;       // 皇帝任务在 E 专项测，前期屏蔽

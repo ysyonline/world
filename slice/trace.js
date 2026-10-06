@@ -16,6 +16,7 @@ globalThis.requestAnimationFrame = () => {};
 const run = `
 const SW = Number((typeof process !== 'undefined' && process.argv && process.argv[2]) || 0); // 扫参用：node slice/trace.js 24
 if (SW) CONFIG.walkSpeed = SW;
+CONFIG.assaultMode = 'turnbased'; // 无头经济回归走委托结算（实时战斗由 settle-smoke.js 覆盖）
 AUTO = { curfew: true, emperor: true, gate: false, oil: true, sortie: false, block: true };
 state.curfewPolicy = 'closed';
 function B(k, zone, r, c) { tryBuild(k, zone, r, c); return gridOf(zone)[r][c]; }

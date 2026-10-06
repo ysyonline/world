@@ -30,10 +30,10 @@ const CONFIG = {
     city: { x: 90, y: 261, w: 520, h: 200 },
     // 两门 + 各自门侧一段可攀墙 = 每方向 2 攻击点 = 全域 4 段布防（08 §3 进攻面方案②）
     segs: [
-      { name: '前门',   side: 'south', x: 320, w: 60,  climb: false }, // 正门
-      { name: '前侧墙', side: 'south', x: 420, w: 120, climb: true  }, // 云梯可攀
-      { name: '后门',   side: 'north', x: 190, w: 60,  climb: false }, // 便门（耐久更低，第 3 步实装）
-      { name: '后侧墙', side: 'north', x: 300, w: 120, climb: true  },
+      { name: '前门',   side: 'south', x: 320, w: 60,  climb: false, maxHp: 12 }, // 正门
+      { name: '前侧墙', side: 'south', x: 420, w: 120, climb: true,  maxHp: 12 }, // 云梯可攀（无门，耐久仅供回合制兜底）
+      { name: '后门',   side: 'north', x: 190, w: 60,  climb: false, maxHp: 9  }, // 便门：耐久更低（02 §3.1 定案，第 4 步实装）
+      { name: '后侧墙', side: 'north', x: 300, w: 120, climb: true,  maxHp: 12 },
     ],
   },
   // 视口与相机：右栏常驻 280 + 顶 HUD 56 + 底日志 80 → 地图视口 1000×584
@@ -68,6 +68,12 @@ const CONFIG = {
   gateMaxHp: 12,
   gateRepairSoil: 20,     // 修门：土20+木5（用户定：土多木少），一次修满
   gateRepairWood: 5,
+  // —— 08 §6 第 4 步：跨层接口（战前快照 / 战后回写）——
+  assaultMode: 'live',    // 'live'=总攻进实时战场（浏览器默认）｜'turnbased'=委托将领回合制结算（无头回归 playtest/trace 走这条）
+  assaultGateBrokenPrestige: 2, // 每破一门额外扣声望 [PLACEHOLDER：取打赢声望 +10 的 1/5，避免"破一门=等于白打"]
+  assaultLootPerKill: 0,        // 战利品：每歼敌缴获钱 [PLACEHOLDER·挂 EA，与俘虏机制联动；默认 0=只留接口不进水]
+  invaderDemolishP: 0.25,       // 入城敌每名毁 1 座城内建筑的概率 [PLACEHOLDER]
+  liveSkillCost: { log: 1, oil: 1 }, // 战中技能消耗工匠坊库存：檑木/火油各 1 份；修门同 repairGate 价（土20木5）
   // 敌波次日程（02 §3 三层节奏，占位）
   waves: [
     { day: 15, size: 6,  siege: false, label: '小股骚扰' },

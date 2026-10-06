@@ -28,13 +28,16 @@ const state = {
   grainNeed: CONFIG.start.pop * CONFIG.grainPerCapita,
   troops: [],            // {prof:0~100, seg:null|0~3, type:'melee'|'archer'|'engineer'}
   unpaidDays: 0,
-  // 实时战斗层（08 §6 第 3 步）：armed=总攻已至（可进战场）/ active=正在实时战斗中
-  // 第 3 步只做「快照直通」——经营数值映射进战斗单位，战斗结果**不回写**（回写是第 4 步接口结算）
-  live: { armed: false, active: false, focusSeg: 0, result: null },
+  // 实时战斗层（08 §6 第 4 步）：armed=总攻已至 / active=正在实时战斗中
+  // pre = 战前快照（对账与归因链的基准：人口/兵力/门耐久/器械/物资）
+  // skillUse = 战中消耗台账（檑木/火油/修门次数）——战后进账本与结算面板
+  // settled：总攻已结算（禁止再进战场——否则可反复重开刷结果，stakes 归零）
+  live: { armed: false, active: false, focusSeg: 0, result: null, pre: null, skillUse: null, waveSize: 0, settled: false },
   payNeed: 0,
   deserters: 0,
   selectedSeg: null,
-  gateHp: [CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp, CONFIG.gateMaxHp],
+  // 门耐久按段取上限：便门 9 < 正门 12（02 §3.1 定案；墙段无门，取 gateMaxHp 供回合制兜底）
+  gateHp: CONFIG.map.segs.map(function (s) { return s.maxHp || CONFIG.gateMaxHp; }),
   segLogs: [0, 0, 0, 0],      // 已部署檑木
   segOil: [0, 0, 0, 0],       // 已部署火油
   segXbow: [0, 0, 0, 0],      // 已部署重弩

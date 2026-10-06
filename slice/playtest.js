@@ -13,6 +13,7 @@ globalThis.window = { addEventListener: () => {} };
 globalThis.requestAnimationFrame = () => {};
 
 const run = `
+CONFIG.assaultMode = 'turnbased'; // 无头经济回归走委托结算（实时战斗路径由 settle-smoke.js 守护）
 AUTO = { curfew: true, emperor: true, gate: false, oil: true, sortie: false, block: true }; // 不出城：保近战堵门（v0.3 占位数值下出城折损耗近战）
 state.curfewPolicy = 'closed'; // 合理玩家：常闭免打扰（宿驿站税减半是小代价）
 function B(k, zone, r, c) { tryBuild(k, zone, r, c); return gridOf(zone)[r][c]; }

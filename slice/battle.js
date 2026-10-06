@@ -99,8 +99,10 @@ function initMap() {
   // 门 = segs 中不可攀的两段（前门 south / 后门 north）；可攀段是云梯靶子不是门
   CONFIG.map.segs.forEach((sg, i) => {
     if (sg.climb) return;
+    // 门耐久取自 map.segs.maxHp（第 4 步）：便门 9 < 正门 12，经营的门损带进战场
+    const maxHp = sg.maxHp || RTS_CONFIG.gateMaxHp;
     GATES.push({ id: i, seg: i, side: sg.side, label: sg.name, x: sg.x + sg.w / 2, y: wallY(sg.side),
-      w: sg.w, hp: RTS_CONFIG.gateMaxHp, maxHp: RTS_CONFIG.gateMaxHp, broken: false });
+      w: sg.w, hp: maxHp, maxHp: maxHp, broken: false });
   });
 }
 function insideCity(x, y) { const C = RTS_CONFIG.city; return x > C.x && x < C.x + C.w && y > C.y && y < C.y + C.h; }
@@ -166,6 +168,8 @@ const S = {
   selected: new Set(),
   gameOver: null, brokenGates: [], insideEnemies: new Set(),
   ops: 0, opLog: [], activeTime: 0, pausedTime: 0,
+  peakInside: 0,        // 战斗期间同时在城内的敌人数峰值（第 4 步：设施损毁与「赢了也破防」的归因口径）
+  siegeCount: 0,        // 总攻实际生成敌数（第 4 步：俘虏口径 kills ≥ 90% 的分母）
   killsByType: { archer: 0, melee: 0, xbow: 0, log: 0, oil: 0 },
   volleyUses: 0, sortieMoves: 0,
   ai: { luresDone: 0, siegeSpawned: false },
@@ -182,6 +186,7 @@ function reset(seed) {
   S.selected = new Set();
   S.gameOver = null; S.brokenGates = []; S.insideEnemies = new Set();
   S.ops = 0; S.opLog = []; S.activeTime = 0; S.pausedTime = 0;
+  S.peakInside = 0; S.siegeCount = 0;
   S.killsByType = { archer: 0, melee: 0, xbow: 0, log: 0, oil: 0 };
   S.volleyUses = 0; S.sortieMoves = 0;
   S.ai = { luresDone: 0, siegeSpawned: false };
@@ -355,6 +360,7 @@ function spawnSiege() {
   spawnGroup('red', MAP.cliffW + 70, cy, Array(6).fill('rider'), 70);
   S.enemies.forEach(e => { if (e.state === 'ambush') { e.state = 'hunt'; e.squad = 'red'; } });
   SQUADS.forEach(sq => { if (!sq.total) sq.total = S.enemies.filter(e => e.squad === sq.key).length; });
+  S.siegeCount = S.enemies.filter(e => !e.despawned).length; // 含前波已转化的伏兵/游骑
   banner('【总攻】四色分进——白攻' + g0.label + ' · 青逼' + g1.label + ' · 乌爬' + cs.name + ' · 骍骑游弋');
 }
 function nearestWallPointTo(e) {
@@ -796,6 +802,7 @@ function step(dt) {
   S.enemies = S.enemies.filter(e => !e.dead);
   // 涌入判败（只统计真正进入墙内围合区的敌：爬墙者/墙上互搏者不计）
   S.insideEnemies = new Set(S.enemies.filter(e => e.state !== 'climb' && e.state !== 'wallfight' && e.state !== 'smash' && insideCity(e.x, e.y)).map(e => e.id));
+  if (S.insideEnemies.size > S.peakInside) S.peakInside = S.insideEnemies.size;
   if (S.insideEnemies.size >= AI.floodInsideLose) { defeat('匈奴涌入城内', '破口涌入者众（不做巷战），城陷。'); return; }
   checkSquadRout();
   if (S.ai.siegeSpawned && S.enemies.length === 0) victory();
@@ -833,6 +840,7 @@ const TEAM_COLORS = { melee: '#c9a55a', archer: '#7ec8a9', engineer: '#9ab0d8' }
         t: S.t, gameOver: S.gameOver, ops: S.ops, activeTime: S.activeTime, pausedTime: S.pausedTime,
         kills: Object.assign({}, S.killsByType), volleyUses: S.volleyUses, sortieMoves: S.sortieMoves,
         brokenGates: S.brokenGates.map(g => g.label),
+        peakInside: S.peakInside, siegeCount: S.siegeCount,
         gates: GATES.map(g => ({ label: g.label, hp: Math.round(g.hp * 10) / 10, broken: g.broken })),
         teams: S.teams.map(t => ({ label: t.label, n: t.n, dead: t.dead, onWall: t.onWall, busy: Math.round(t.busy * 10) / 10 })),
         enemiesAlive: S.enemies.length,

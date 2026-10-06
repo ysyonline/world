@@ -109,7 +109,12 @@ window.addEventListener('keydown', function (e) {
   // ---- 战斗模式键位（优先）----
   if (inBattle()) {
     if (e.code === 'Space') { Battle.togglePause(); e.preventDefault(); return; }
-    if (e.code === 'Escape') { exitBattle(); return; }
+    if (e.code === 'Escape') {
+      // 第 4 步：总攻未分胜负不可撤离（否则可以反复重开战斗刷结果，stakes 归零）
+      if (Battle.S.gameOver) exitBattle();
+      else pushLog('战事未决，不可撤离（空格可暂停下令）');
+      return;
+    }
     if (e.code === 'KeyF') { pushLog('战斗速度 ×' + Battle.cycleSpeed()); return; }
     if (e.code === 'KeyZ') {
       setCamera(camera.mode === 'overview' ? 'battle' : 'overview', camera.focusSeg);
@@ -125,17 +130,18 @@ window.addEventListener('keydown', function (e) {
     }
     const si = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
     if (si >= 0) {
-      Battle.trySkill(['volley', 'log', 'oil', 'repair'][si], Battle.S.mouse.x, Battle.S.mouse.y);
+      // 第 4 步：技能走 sim 的 useBattleSkill（檑木/火油扣该墙段存货，修门扣土木）
+      useBattleSkill(['volley', 'log', 'oil', 'repair'][si], Battle.S.mouse.x, Battle.S.mouse.y);
       return;
     }
     return;
   }
   if (e.code === 'Space') { togglePause(); e.preventDefault(); return; }
   if (e.code === 'Escape' && state.buildMode) { state.buildMode = null; pushLog('取消放置'); return; }
-  // B：总攻已至时进入实时战场（第 3 步：视角推近 + 战斗层接管）
+  // B：手动进入实时战场（总攻日会自动进入，这里是调试/回看入口）
   if (e.code === 'KeyB') {
-    if (state.live && state.live.armed) enterBattle(state.live.focusSeg);
-    else pushLog('尚未至总攻日（总攻当日方可进入实时战场）');
+    if (state.live && (state.live.armed || state.live.waveSize)) enterBattle(state.live.focusSeg);
+    else pushLog('尚未至总攻日（总攻当日自动进入实时战场）');
     return;
   }
   // Z：预演视角切换（全景档 ⇄ 战斗档）——第 2 步先把手感摆出来，第 3 步由总攻自动触发

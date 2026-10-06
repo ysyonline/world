@@ -110,6 +110,8 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(250);
   const bs = await page.evaluate(() => ({ active: state.live.active, mode: camera.mode, zoom: camera.zoom, labels: buttons.map(b => b.label) }));
   ok(bs.active && bs.mode === 'battle', '进入战场：视角自动推近战斗档（zoom ' + bs.zoom.toFixed(2) + '）');
+  // 第 4 步：进战场先暂停——开战前给玩家布防下令的窗口（02 定调：暂停中可下全部指令）
+  ok(await page.evaluate(() => Battle.S.paused === true), '进战场先暂停（开战前可布防下令）');
   const skillBtns = bs.labels.filter(l => /齐射|檑木|火油|修门/.test(l));
   ok(skillBtns.length === 4, '战斗面板指令钮齐全（' + skillBtns.join(' / ') + '）');
   const bpx = await page.evaluate(() => {
@@ -135,7 +137,7 @@ const server = http.createServer((req, res) => {
   p = toScreen(wallP.x, wallP.y);
   await page.mouse.click(p.x, p.y, { button: 'right' });
   await page.waitForTimeout(60);
-  await page.evaluate(() => Battle.run(8));
+  await page.evaluate(() => { Battle.setPaused(false); Battle.run(8); }); // 解除暂停后推进 8s（暂停态下 step 会直接返回）
   const arch = await page.evaluate(() => ({ onWall: Battle.S.teams[2].onWall, side: Battle.S.teams[2].wallSide }));
   ok(arch.onWall, '右键点墙线 → 部队登城驻防（' + arch.side + '）');
   // 空格暂停战斗（暂停中仍可下令，是这套 RTS 的灵魂）
@@ -151,9 +153,24 @@ const server = http.createServer((req, res) => {
     await page.screenshot({ path: path.join(ROOT, 'shot-rts.png') });
     console.log('  · 战场截图 shot-rts.png');
   }
+  // 第 4 步：未分胜负不可撤离（否则可反复重开战斗刷结果）；分出胜负后自动回写经营
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(150);
-  ok(await page.evaluate(() => state.live.active === false), 'Esc 退出战场回到经营');
+  await page.waitForTimeout(120);
+  ok(await page.evaluate(() => state.live.active === true), '未分胜负 Esc 不撤离（stakes 不被刷新）');
+  await page.evaluate(() => { Battle.S.gameOver = { win: true, reason: '浏览器检查强制结束', detail: '' }; });
+  await page.waitForTimeout(220);
+  const settle = await page.evaluate(() => ({
+    active: state.live.active, live: !!(state.battleReport && state.battleReport.live),
+    attrib: state.battleReport ? state.battleReport.attrib.length : 0,
+    gate0: state.gateHp[0], pop: getRes('pop'),
+  }));
+  ok(settle.active === false, '分出胜负后自动结算并退出战斗模式');
+  ok(settle.live && settle.attrib >= 4, '战后战报含归因链（' + settle.attrib + ' 条 · 前门 ' + settle.gate0 + '）');
+  if (wantShot) {
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: path.join(ROOT, 'shot-settle.png') });
+    console.log('  · 战后结算面板截图 shot-settle.png');
+  }
 
   // 战斗档截图（给用户过眼）
   if (wantShot) {

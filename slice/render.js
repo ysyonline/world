@@ -288,7 +288,7 @@ function renderScene() {
       ctx.setLineDash(g.climb ? [5, 3] : []);
       ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
       ctx.setLineDash([]);
-      const gh = state.gateHp[s], gm = CONFIG.gateMaxHp;
+      const gh = state.gateHp[s], gm = gateMaxOf(s); // 便门上限 9 < 正门 12（02 §3.1）
       ctx.fillStyle = '#17130e';
       ctx.fillRect(r.x + 1, r.y + r.h - 5, r.w - 2, 3);
       ctx.fillStyle = gh <= 3 ? '#d95745' : (gh < gm ? '#efb63c' : '#8fae66');
@@ -616,7 +616,7 @@ function renderSegPanel() {
   const seg = troopsInSeg(s);
   panel(px, py, pw, ph, '【' + name + '】墙段布防');
   // 城门血条
-  const gh = state.gateHp[s], gm = CONFIG.gateMaxHp;
+  const gh = state.gateHp[s], gm = gateMaxOf(s); // 城门血条
   ctx.font = '12px sans-serif';
   ctx.fillStyle = '#8a7c5e';
   ctx.textAlign = 'left';
@@ -680,35 +680,53 @@ function renderLog() {
 function renderBattleReport() {
   const rep = state.battleReport;
   if (!rep || !state.paused) return;
-  const pw = 460, ph = 260, px = (W - pw) / 2, py = 140;
+  if (rep.live && state.gameOver) return; // 实时战报的归因链已内嵌进终局面板，避免两层面板叠盖
+  const attrib = rep.attrib || [];
+  const lines = []; // {text, tone}——tone 决定颜色：绿=做对了 黄=有代价 红=失血
+  if (rep.siege && rep.live) { // 第 4 步：实时战斗战后结算（附归因链）
+    lines.push({ tone: 'note', text: '敌军规模 ' + rep.enemySize + ' · 歼敌 ' + rep.kills + ' · 殉国 ' + rep.dead + ' · 俘虏 ' + rep.captives
+      + (rep.loot > 0 ? ' · 缴获 ' + rep.loot + ' 钱' : '') });
+    lines.push({ tone: 'note', text: '有效操作 ' + rep.ops + ' 次 · 暂停占比 ' + Math.round(rep.pauseRatio * 100) + '% · 声望 '
+      + (rep.prestige >= 0 ? '+' : '') + rep.prestige + (rep.peakInside > 0 ? ' · 曾涌入 ' + rep.peakInside + ' 骑' : '') });
+    lines.push({ tone: 'head', text: '—— 归因链：这一仗是被哪几个经营决策决定的 ——' });
+    attrib.forEach(function (a) { lines.push(a); });
+  } else if (rep.siege) {
+    lines.push({ tone: 'note', text: '敌军规模 ' + rep.enemySize + ' · 歼敌 ' + rep.kills + ' · 殉国 ' + rep.dead + ' · 俘虏 ' + rep.captives });
+    rep.segs.forEach(function (s) {
+      lines.push({ tone: 'note', text: CONFIG.wall.segNames[s.seg] + '段：' + s.rounds + ' 轮 · 门损 ' + s.gateDmg + '（现 ' + state.gateHp[s.seg] + '/' + gateMaxOf(s.seg) + '）' });
+    });
+    lines.push({ tone: 'note', text: '声望 +' + CONFIG.assaultWinPrestige });
+  } else {
+    lines.push({ tone: 'note', text: '敌 ' + rep.enemySize + ' 骑 · 城头歼敌 ' + rep.kills + (rep.captives ? ' · 俘虏 ' + rep.captives : '') });
+    if (rep.gateOpen) {
+      lines.push({ tone: 'bad', text: '开门：铁骑入城抢粮 ' + rep.lootGrain + ' · 钱 ' + rep.lootMoney + ' · 杀民 ' + rep.lootPop });
+      lines.push({ tone: 'bad', text: '声望 -' + rep.lootPrestige + '（抢完即走，下次还敢开吗？）' });
+    } else {
+      lines.push({ tone: 'warn', text: '关门：城外存量被劫 ' + Math.round(rep.fieldRobbed) + ' · 平民遇害 ' + rep.fieldKilled + (rep.beaconBurned ? ' · 烽燧被焚' : '') });
+      lines.push({ tone: 'note', text: '（收保可免平民伤亡；烽燧重建耗土）' });
+    }
+  }
+  const pw = 580, ph = Math.min(H - CONFIG.view.logH - 120, 92 + lines.length * 21 + 62);
+  const px = (W - pw) / 2, py = Math.max(72, (H - CONFIG.view.logH - ph) / 2 - 16);
   ctx.fillStyle = 'rgba(10, 8, 6, 0.55)';
   ctx.fillRect(0, 56, W, H - 56 - CONFIG.view.logH);
   panel(px, py, pw, ph, '');
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#e8dcc0';
   ctx.font = 'bold 19px sans-serif';
-  ctx.fillText(rep.siege ? '【大捷 · 总攻退去】' : (rep.gateOpen ? '【劫掠 · ' + rep.label + '】' : '【骚扰 · ' + rep.label + '】'), px + pw / 2, py + 28);
+  if (rep.siege && rep.live) {
+    ctx.fillStyle = rep.win ? '#8ad08a' : '#e06a5a';
+    ctx.fillText(rep.win ? '【大捷 · 总攻退去】' : '【城陷 · 关隘失守】', px + pw / 2, py + 28);
+  } else {
+    ctx.fillStyle = '#e8dcc0';
+    ctx.fillText(rep.siege ? '【大捷 · 总攻退去】' : (rep.gateOpen ? '【劫掠 · ' + rep.label + '】' : '【骚扰 · ' + rep.label + '】'), px + pw / 2, py + 28);
+  }
   ctx.textAlign = 'left';
   ctx.font = '13px sans-serif';
-  ctx.fillStyle = '#c9bd9e';
-  const lines = [];
-  if (rep.siege) {
-    lines.push('敌军规模 ' + rep.enemySize + ' · 歼敌 ' + rep.kills + ' · 殉国 ' + rep.dead + ' · 俘虏 ' + rep.captives);
-    rep.segs.forEach(function (s) {
-      lines.push(CONFIG.wall.segNames[s.seg] + '段：' + s.rounds + ' 轮 · 门损 ' + s.gateDmg + '（现 ' + state.gateHp[s.seg] + '/' + CONFIG.gateMaxHp + '）');
-    });
-    lines.push('声望 +' + CONFIG.assaultWinPrestige);
-  } else {
-    lines.push('敌 ' + rep.enemySize + ' 骑 · 城头歼敌 ' + rep.kills + (rep.captives ? ' · 俘虏 ' + rep.captives : ''));
-    if (rep.gateOpen) {
-      lines.push('开门：铁骑入城抢粮 ' + rep.lootGrain + ' · 钱 ' + rep.lootMoney + ' · 杀民 ' + rep.lootPop);
-      lines.push('声望 -' + rep.lootPrestige + '（抢完即走，下次还敢开吗？）');
-    } else {
-      lines.push('关门：城外存量被劫 ' + Math.round(rep.fieldRobbed) + ' · 平民遇害 ' + rep.fieldKilled + (rep.beaconBurned ? ' · 烽燧被焚' : ''));
-      lines.push('（收保可免平民伤亡；烽燧重建耗土）');
-    }
-  }
-  lines.forEach(function (t, i) { ctx.fillText(t, px + 24, py + 60 + i * 22); });
+  const TONE = { good: '#8fae66', warn: '#efb63c', bad: '#d95745', note: '#c9bd9e', head: '#e8dcc0' };
+  lines.forEach(function (l, i) {
+    ctx.fillStyle = TONE[l.tone] || '#c9bd9e';
+    ctx.fillText(l.text, px + 24, py + 58 + i * 21);
+  });
   drawButton(px + pw / 2 - 60, py + ph - 40, 120, 28, '关 闭', false, function () {
     state.battleReport = null;
     if (state.pendingCaptives > 0) {
@@ -803,7 +821,11 @@ function renderDecision() {
 }
 function renderGameOver() {
   if (!state.gameOver) return;
-  const pw = 500, ph = 240, px = (W - pw) / 2, py = 170;
+  // 第 4 步：实时战斗的终局面板直接内嵌归因链（信号 C——玩家先看因果，再看胜负按钮）
+  const rep = state.battleReport;
+  const attrib = (rep && rep.live && rep.attrib) || [];
+  const pw = 600, ph = attrib.length ? 262 + attrib.length * 21 : 240;
+  const px = (W - pw) / 2, py = Math.max(48, (H - CONFIG.view.logH - ph) / 2 - 10);
   ctx.fillStyle = 'rgba(10, 8, 6, 0.75)';
   ctx.fillRect(0, 0, W, H);
   panel(px, py, pw, ph, '');
@@ -818,8 +840,20 @@ function renderGameOver() {
   ctx.font = '13px sans-serif';
   ctx.fillText(state.gameOver.detail, px + pw / 2, py + 112);
   ctx.fillText('第 ' + state.day + ' 日 · 民' + getRes('pop') + ' 兵' + getRes('soldiers') + ' 声望' + getRes('prestige') + ' 政' + getRes('political'), px + pw / 2, py + 138);
-  ctx.fillStyle = '#8a7c5e';
-  ctx.fillText(state.checkpoint ? '复盘：输在哪一环？粮？门？声望？——或读档重打总攻' : '复盘：输在哪一环？粮？门？声望？——刷新页面重开一局', px + pw / 2, py + 168);
+  if (attrib.length) {
+    ctx.textAlign = 'left';
+    ctx.font = '12px sans-serif';
+    const TONE = { good: '#8fae66', warn: '#efb63c', bad: '#d95745', note: '#c9bd9e', head: '#e8dcc0' };
+    ctx.fillStyle = '#e8dcc0';
+    ctx.fillText('—— 归因链：这一仗是被哪几个经营决策决定的 ——', px + 36, py + 172);
+    attrib.forEach(function (a, i) {
+      ctx.fillStyle = TONE[a.tone] || '#c9bd9e';
+      ctx.fillText(a.text, px + 36, py + 194 + i * 21);
+    });
+  } else {
+    ctx.fillStyle = '#8a7c5e';
+    ctx.fillText(state.checkpoint ? '复盘：输在哪一环？粮？门？声望？——或读档重打总攻' : '复盘：输在哪一环？粮？门？声望？——刷新页面重开一局', px + pw / 2, py + 168);
+  }
   if (state.checkpoint && !state.gameOver.win) {
     drawButton(px + pw / 2 - 160, py + ph - 52, 140, 32, '读档 · 总攻前夜', false, function () {
       if (loadCheckpoint()) pushLog('【读档】已回到总攻日晨');
@@ -985,12 +1019,19 @@ function renderBattlePanel() {
   const skills = [['1 齐射', 'volley'], ['2 檑木', 'log'], ['3 火油', 'oil'], ['4 修门', 'repair']];
   skills.forEach(function (s, i) {
     const bx = px + 8 + (i % 2) * 122, by = y + 28 + Math.floor(i / 2) * 40;
-    drawButton(bx, by, 116, 34, s[0], false, function () { Battle.trySkill(s[1], S.mouse.x, S.mouse.y); });
+    // 第 4 步：技能走 sim（扣经营库存），不直连战斗层
+    drawButton(bx, by, 116, 34, s[0], false, function () { useBattleSkill(s[1], S.mouse.x, S.mouse.y); });
   });
   y += 124;
-  ctx.textAlign = 'left'; ctx.font = '11px sans-serif'; ctx.fillStyle = '#7a6f58';
+  ctx.textAlign = 'left'; ctx.font = '11px sans-serif';
+  // 城头存货（檑木/火油按**墙段**扣：备战时放哪一段，战中就只有那一段能用——布防决策的兑现）
+  const lg = state.segLogs.reduce(function (a, b) { return a + b; }, 0);
+  const ol = state.segOil.reduce(function (a, b) { return a + b; }, 0);
+  ctx.fillStyle = '#8a7c5e';
+  ctx.fillText('城头存货 檑木' + lg + ' 火油' + ol + '（按段扣用，放错段=用不上）', px + 12, y + 8);
+  ctx.fillStyle = '#7a6f58';
   ['左键点部队 / 拖框选 · 右键下令', '点墙线 = 上墙驻防', '空格暂停（暂停中仍可下令）', 'F 变速 · Z 视角 · X 换聚焦方向'].forEach(function (t, i) {
-    ctx.fillText(t, px + 12, y + 8 + i * 16);
+    ctx.fillText(t, px + 12, y + 26 + i * 16);
   });
 }
 function renderBattleBanners() {
@@ -1033,7 +1074,7 @@ function renderBattleEnd() {
     ctx.fillStyle = '#d8cfb8'; ctx.fillText(l[1], x + 190, y + 120 + i * 24);
   });
   ctx.textAlign = 'center'; ctx.fillStyle = '#8a7f66'; ctx.font = '12px sans-serif';
-  ctx.fillText('按 Esc 返回经营（第 3 步：结算不回写）', W / 2, y + h - 18);
+  ctx.fillText('战事已决——Esc 返回经营（伤亡/门损/器械已回写经营层）', W / 2, y + h - 18);
 }
 
 function render() {
