@@ -283,6 +283,39 @@ console.assert(repW3 && repW3.interceptLoss === 0, 'W3 拦截阵亡 ⌊1×0.4⌋
 console.assert(repW3 && repW3.lootGrain === 0 && repW3.lootMoney === 0 && repW3.lootPrestige === 0, 'W3 全拦=零损失（relief=0）, got ' + (repW3 && repW3.lootGrain + '/' + repW3.lootMoney + '/' + repW3.lootPrestige));
 state.paused = false; state.battleReport = null;
 
+// W4：出城迎击（v0.4.2）——胜端：8 满训近战击退 size6 骚扰（D15 合理兵力，产地无损+缴获）
+// 战力：8×0.92×1.0=7.36 vs 敌池 6×3×0.4=7.2 → 险胜（锚见 CONFIG 注释：门槛故意卡在"合理中期配置"）
+setRes('grain', 5000); setRes('money', 100); setRes('pop', 40); setRes('prestige', 50);
+setRes('soldiers', 8);
+state.troops.length = 0;
+for (let i = 0; i < 8; i++) state.troops.push({ prof: 80, seg: null, type: 'melee' });
+state.outGrid[0][0].stock = { grain: 40 }; state.outGrid[0][0].workers = 1;
+state.walkers.length = 0; state.recalled = false;
+CONFIG.waves = [{ day: state.day + 1, size: 6, siege: false, label: '小股骚扰' }];
+state.waveFired = {}; state.enemies = []; state.battleReport = null;
+AUTO.gate = 'sortie';
+stepGame(31);
+const repW4 = state.battleReport;
+console.assert(repW4 && repW4.sortie === true && repW4.sortieWon === true, 'W4 迎击胜利（sent ' + (repW4 && repW4.sortieSent) + '，won=' + (repW4 && repW4.sortieWon) + '）');
+console.assert(repW4 && repW4.fieldRobbed === 0 && repW4.fieldKilled === 0, 'W4 迎击胜=产地无损（劫掠 ' + (repW4 && repW4.fieldRobbed) + '/杀 ' + (repW4 && repW4.fieldKilled) + '）');
+console.assert(repW4 && repW4.loot > 0, 'W4 迎击胜=缴获 ' + (repW4 && repW4.loot) + ' 钱');
+state.paused = false; state.battleReport = null;
+// W4b：迎击败端——2 老弱出城 vs size10 骚扰 → 折损+照常被劫（走关门分支）
+setRes('pop', 40); setRes('soldiers', 2);
+state.troops.length = 0;
+state.troops.push({ prof: 10, seg: null, type: 'melee' }, { prof: 10, seg: null, type: 'melee' });
+state.outGrid[0][0].stock = { grain: 40 }; state.outGrid[0][0].workers = 1;
+CONFIG.waves = [{ day: state.day + 1, size: 10, siege: false, label: '大股袭扰' }];
+state.waveFired = {}; state.enemies = []; state.battleReport = null;
+AUTO.gate = 'sortie';
+stepGame(31);
+const repW4b = state.battleReport;
+console.assert(repW4b && repW4b.sortie === true && repW4b.sortieWon === false, 'W4b 迎击失利（won=' + (repW4b && repW4b.sortieWon) + '）');
+console.assert(repW4b && repW4b.sortieLoss === 1, 'W4b 败=折损 ⌊2×0.5⌋=1（got ' + (repW4b && repW4b.sortieLoss) + '）');
+console.assert(repW4b && repW4b.fieldRobbed > 0, 'W4b 败=照常被劫（劫 ' + Math.round(repW4b && repW4b.fieldRobbed) + '）');
+state.paused = false; state.battleReport = null;
+AUTO.gate = false;
+
 // ---- V：预警与存档（00-总纲 §5 实装项） ----
 // V1：声望<10 红色预警日志
 setRes('prestige', 9); state.day += 1; onNewDay(state.day);

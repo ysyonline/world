@@ -349,6 +349,11 @@ dailySettlers.push(function commerce(day) {
   if (getRes('money') <= 0 && state.merchants <= 0 && !state.gameOver) {
     pushLog('【国库空虚】无商税进项：可拆建筑返半价应急、闲民打零工（+' + CONFIG.idleEarnPerCap + '钱/人/日）、开市坊粜粮');
   }
+  // 木荒显性提示（v0.4.3 自举陷阱修复配套）：木=0 且无伐木场 = 建造全锁——
+  // 伐木场已不耗木，逃生口只剩「攒 30 钱」，把这条从暗知识变明牌
+  if (getRes('wood') <= 0 && countBuilding('lumber') <= 0 && !state.gameOver) {
+    pushLog('【木尽】建造皆需木：伐木场不耗木（30钱），建成即开木线');
+  }
 });
 // 闲工（v0.4.2 经济断层修复）：闲民打零工，每闲民 +idleEarnPerCap 钱/日。
 // 定位是破产救援而非收入流（锚见 CONFIG 注释）：10 闲民=+2/日，跑不赢任何正式岗位。
@@ -641,8 +646,8 @@ dailySettlers.push(function raidWarning() {
   }
 });
 
-// ============================ 骚扰波结算（改造⑥：开/关门两端） ============================
-function resolveRaid(wave, gateOpen) {
+// ============================ 骚扰波结算（改造⑥：开/关门两端 + v0.4.2 出城迎击） ============================
+function resolveRaid(wave, gateOpen, sortie) {
   const comp = composeWave(wave.size, false);
   const rep = { siege: false, label: wave.label, enemySize: wave.size, gateOpen: gateOpen, kills: 0, fled: 0,
     lootGrain: 0, lootMoney: 0, lootPop: 0, lootPrestige: 0, fieldRobbed: 0, fieldKilled: 0, beaconBurned: false, rounds: CONFIG.raidRounds };
@@ -662,6 +667,37 @@ function resolveRaid(wave, gateOpen) {
     alive = now;
   }
   state.enemies = state.enemies.filter(function (e) { return !e.raid; });
+  // ---- v0.4.2 出城迎击（第三选项）：野战兑换，胜=产地无损+缴获，败=折损+照常被劫 ----
+  if (sortie) {
+    const PW = { melee: CONFIG.raidSortiePowerMelee, archer: CONFIG.raidSortiePowerArcher, engineer: CONFIG.raidSortiePowerEngineer };
+    const sortieTroops = state.troops.filter(function (t) { return t.seg === null; }); // 预备队全员出城（上墙的不动）
+    const myPower = sortieTroops.reduce(function (s, t) { return s + soldierPower(t.prof) * PW[t.type]; }, 0);
+    const enemyPower = pool * CONFIG.raidSortieEnemyDef;
+    rep.sortie = true;
+    rep.sortieSent = sortieTroops.length;
+    rep.sortieWon = myPower > 0 && myPower >= enemyPower;
+    if (rep.sortieWon) {
+      // 胜：野战击溃——城头抛射已杀的算战果，残余敌溃逃；产地无损
+      rep.kills = rep.kills + alive; // 溃逃的残余也计入击溃（缴获口径）
+      alive = 0;
+      rep.loot = Math.round(rep.kills * CONFIG.raidLootPerKill);
+      if (rep.loot > 0) { LEDGER_SRC = '缴获'; addRes('money', rep.loot); LEDGER_SRC = null; }
+      pushLog('【迎击大捷】将士 ' + sortieTroops.length + ' 人出城野战：击溃匈奴 ' + wave.size + ' 骑，缴获钱 ' + rep.loot + '，城外产业无损！');
+      state.battleReport = rep;
+      state.paused = true;
+      return; // 产地/平民/烽燧全保住
+    }
+    // 败：折损出战队（上限 raidSortieLossCap），敌照常劫掠（走下面的关门分支——门没开）
+    const loss = Math.min(sortieTroops.length, Math.round(sortieTroops.length * CONFIG.raidSortieLossCap));
+    rep.sortieLoss = loss;
+    for (let i = 0; i < loss; i++) {
+      // 阵亡取熟练度最低者（新兵先死，战场惯例）
+      let mi = -1;
+      state.troops.forEach(function (t, idx) { if (t.seg === null && (mi < 0 || t.prof < state.troops[mi].prof)) mi = idx; });
+      if (mi >= 0) { state.troops.splice(mi, 1); state.res.soldiers -= 1; addRes('pop', -1); }
+    }
+    pushLog('【迎击失利】野战不敌：折损 ' + loss + ' 人，匈奴入郊劫掠……');
+  }
   if (gateOpen) {
     // 开门：小股铁骑入城抢掠（单次上限：粮=库存10%、钱=15%，抢完即走）
     const raiders = Math.max(1, Math.ceil(comp.iron / 2));
@@ -988,8 +1024,11 @@ function applyDecision(d, choice) {
     return;
   }
   if (d.kind === 'gate') {
-    state.gateOpen = choice;
-    resolveRaid(d.wave, choice);
+    // v0.4.2 晚：choice 从 boolean 扩为 'open'|'closed'|'sortie'（旧 boolean 仍兼容：true=open）
+    const open = choice === true || choice === 'open';
+    const sortie = choice === 'sortie';
+    state.gateOpen = open;
+    resolveRaid(d.wave, open, sortie);
     return;
   }
   // 战中决策点（stepBattle 续跑）
@@ -1286,7 +1325,7 @@ function enterBattle(focusSeg) {
   });
   Battle.RTS_CONFIG.player.xbows = Math.max(1, state.live.pre.deployed.xbow); // ③ 重弩架数=已部署数（布防后果）
   Battle.setPaused(true); // 开战前先停：看清局势再开打（暂停中可下令——02 定调）
-  pushLog('【战场】总攻已至——空格开战（暂停中仍可下令） · 1~4 技能 · 右键移动 · 点墙线上墙');
+  pushLog('【战场】总攻已至——空格开战（暂停中仍可下令） · 1~4 技能 · 右键移动 · 点墙线上墙 · Z 键/右侧按钮看全景');
 }
 function exitBattle() {
   const S = Battle.S;

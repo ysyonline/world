@@ -11,7 +11,9 @@ const CONFIG = {
   dayLengthSec: 30,     // 1 游戏日 = 30 真实秒（待原型验证）
   startDay: 1,
   // 开局资源（九项 + 政治点，全部占位，待原型验证）
-  start: { grain: 120, wood: 80, soil: 20, iron: 10, money: 200, pop: 30, soldiers: 0, prestige: 50, political: 0 },
+  // v0.4.3 开局木 80→100：原 80 与「市坊+兵营+矿洞+田2」恰好相抵=零容错，开局顺序被锁死；
+  // 100 留出 20 余量（一座烽燧/民房级容错），开局顺序不再唯一。
+  start: { grain: 120, wood: 100, soil: 20, iron: 10, money: 200, pop: 30, soldiers: 0, prestige: 50, political: 0 },
   // ---- 网格：旧「抽象横带」布局已作废，改用合图真地图（08 §6 第 2 步）----
   // 城外分前郊/后郊两区（左右是深涧天险，城外只剩南北可用）：行 0~1 = 后郊（北），行 2~3 = 前郊（南）
   outGrid: { rows: 4, cols: 8, cell: 52, x0: 142, y0North: 135, y0South: 483, splitRow: 2 },
@@ -41,7 +43,8 @@ const CONFIG = {
   camera: {
     // 全景档 zoom 运行时按 fit 算出（0.81），不写死；战斗档为验收值：
     // 下界 = 单兵≥12px（世界直径 13 → zoom≥0.92），上界 = 一方向「门+门侧墙」同屏（→zoom≤1.56）
-    battleZoom: 1.4, // [PLACEHOLDER 区间中值偏上，实测后回填]
+    // v0.4.2 晚 1.4→1.2：用户实机反馈"只能看见前城门"——推近别太猛，全景随时一键可回（面板按钮/Z）
+    battleZoom: 1.2, // [PLACEHOLDER 区间中值偏下，实测后回填]
   },
   // 岗位效率曲线（01 §3.2）：x≤N → x/N；超员默认禁塞
   overstaffK: 2.5,
@@ -119,6 +122,17 @@ const CONFIG = {
   interceptLoss: 0.4,     // 拦截交换损耗：每拦 K 骑阵亡 ⌊K×0.4⌋ 近战（永久减人口）[PLACEHOLDER]
   raidFieldRobRate: 0.25, // 关门：劫粮道=城外各产地存量被抢比例
   raidFieldKillRate: 0.3, // 关门：城外平民被杀比例（收保可免）
+  // 出城迎击（v0.4.2 晚：用户实机「匈奴来时只能被动防守，田必定被毁」——第三选项补上）
+  // 野战兑换比：我方战力按兵种熟练度折算，敌按 enemyHp 折池。胜=产地无损+缴获；败=折损+照常被劫。
+  // 锚（W4 实测校准）：满训 8 近战 = 8×0.92×1.0 = 7.36 战力 → 需敌池 ≤7.2 才赢。
+  // size6 骚扰池 = 6×3=18 → 系数 0.4（=野战骑不下马步战、被以逸待劳）→ 7.2。即「8 满训近战可击退 6 骑」——
+  // 恰是 D15 骚扰时合理玩家兵力（兵营 D8~12 建成+4 日训练），符合「迎击是中期解锁的主动手段」定位。
+  // 制衡：兵力不足时硬出城=白折损（raidSortieLossCap）；上墙部队不参战——布防与迎击互斥，玩家要选。
+  raidSortiePowerMelee: 1.0,
+  raidSortiePowerArcher: 0.5,   // 弓兵下城野战：抛射失去城墙高度加成
+  raidSortiePowerEngineer: 0.8,
+  raidSortieEnemyDef: 0.4,      // 敌野战有效战力系数（乘在敌池上）[PLACEHOLDER·无头回测定]
+  raidSortieLossCap: 0.5,       // 败方折损上限（出战的 50%——不会全军覆没，但很痛）
   // 俘虏处置（03 §4 最简版；种子随机可复现）
   captiveRate: 0.5,
   captiveKillPrestige: 2,
@@ -181,7 +195,9 @@ const CONFIG = {
   buildings: {
     // 城外产线：产出秒级累积产地存量，由在岗工人自运回城入库（v0.3 产者自运）
     farm:   { label: '农田',   zone: 'out', cost: { money: 20, wood: 5 },            capacity: 5, output: { grain: 20 } },
-    lumber: { label: '伐木场', zone: 'out', cost: { money: 30, wood: 10 },           capacity: 3, output: { wood: 12 } },
+    // v0.4.3 自举陷阱修复：伐木场不耗木——「唯一产木建筑消耗木」违反设计公理，
+    // 开局 80 木一旦花完（市坊20+兵营30+矿洞20+田2=恰好80）即永久死锁。真成本是 3 岗+30钱。
+    lumber: { label: '伐木场', zone: 'out', cost: { money: 30 },                    capacity: 3, output: { wood: 12 } },
     mine:   { label: '矿洞',   zone: 'out', cost: { money: 50, wood: 20 },           capacity: 3, output: { soil: 4, iron: 2 } },
     beacon: { label: '烽燧',   zone: 'out', cost: { money: 30, wood: 5, soil: 15 },  capacity: 0 }, // 无人驻守、驱雾、预警+1日
     // 关内

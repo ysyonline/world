@@ -217,30 +217,47 @@ function renderLedger() {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   let y = py + 40;
-  // 表头（v0.4.1 面板收窄到 380：列位同步收紧）
+  // 表头（v0.4.2 晚修：加「今日支/入」合计列——亏损归因先看总口子再看来源；来源明细按数额降序，军饷/建造大额排最前）
   ctx.fillStyle = '#8a7c5e';
-  ctx.fillText('资源   昨日净额   今日已入/出（来源：数额）      预估', x + 12, y);
+  ctx.fillText('资源   昨日净额   今日支/入合计              预估', x + 12, y);
   y += 18;
   const est = todayEstimate();
   const yd = state.ledger.yday;
   LEDGER_KEYS.forEach(function (k, idx) {
     const net = yd && yd.net ? (yd.net[k] || 0) : 0;
     const flows = state.ledger.today[k] || {};
-    // v0.4.2 流水可见性修补：原单行 20 字符截断把军饷/建造/任务大头全砍掉（"看不出为啥为负"的直接原因）。
-    // 改两行制：净额行 + 来源明细独占一行（11px，可用 ~254px ≈ 34 字，仍超截断但大头保住）。
+    // v0.4.2 流水可见性修补：来源明细按 |数额| 降序——最大的花销排最前，34 字截断只牺牲尾部小额
     const srcs = Object.keys(flows).filter(function (s) { return Math.abs(flows[s]) >= 0.05; });
+    srcs.sort(function (a, b) { return Math.abs(flows[b]) - Math.abs(flows[a]); });
     const fStr = srcs.map(function (s) { return s + (flows[s] > 0 ? '+' : '') + Math.round(flows[s] * 10) / 10; }).join(' ') || '—';
     const e = Math.round((est[k] || 0) * 10) / 10;
+    // 今日支出/收入合计（拆正负）：一眼回答"今天钱主要花哪了"
+    let outSum = 0, inSum = 0;
+    srcs.forEach(function (s) { if (flows[s] < 0) outSum += flows[s]; else inSum += flows[s]; });
     ctx.fillStyle = '#c9bd9e';
     ctx.fillText(RES_LABEL[k], x + 12, y);
     ctx.fillStyle = net > 0 ? '#a8c98a' : (net < 0 ? '#ff8a7a' : '#8a7c5e');
     ctx.fillText((net > 0 ? '+' : '') + Math.round(net * 10) / 10, x + 68, y);
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = outSum < 0 ? '#ff8a7a' : '#8a7c5e';
+    ctx.fillText(Math.round(outSum * 10) / 10, x + 130, y);
+    ctx.fillStyle = inSum > 0 ? '#a8c98a' : '#8a7c5e';
+    ctx.fillText('+' + Math.round(inSum * 10) / 10, x + 178, y);
+    ctx.font = '12px sans-serif';
     ctx.fillStyle = e >= 0 ? '#a8c98a' : '#efb63c';
     ctx.fillText((e > 0 ? '+' : '') + e, x + 320, y);
     y += 16;
-    ctx.fillStyle = '#a89f88';
     ctx.font = '11px sans-serif';
-    ctx.fillText(fStr.length > 34 ? fStr.slice(0, 34) + '…' : fStr, x + 68, y);
+    const parts = srcs.slice(0, 7).map(function (s) { return { s: s, v: flows[s] }; });
+    let dx = x + 68;
+    for (const p of parts) {
+      const seg = p.s + (p.v > 0 ? '+' : '') + Math.round(p.v * 10) / 10 + ' ';
+      if (dx + seg.length * 6.1 > x + pw - 12) { ctx.fillStyle = '#8a7c5e'; ctx.fillText('…', dx, y); break; }
+      ctx.fillStyle = p.v < 0 ? '#ff8a7a' : '#a8c98a';
+      ctx.fillText(seg, dx, y);
+      dx += seg.length * 6.1;
+    }
+    if (!srcs.length) { ctx.fillStyle = '#8a7c5e'; ctx.fillText('—', x + 68, y); }
     ctx.font = '12px sans-serif';
     y += 18;
   });
@@ -250,7 +267,7 @@ function renderLedger() {
   LEDGER_KEYS.forEach(function (k) {
     if ((est[k] || 0) < -0.05) {
       if (k === 'grain') diag = '粮入不敷出：扩田/加农，或减口粮消耗';
-      if (k === 'money' && !diag) diag = '钱入不敷出：市坊/皇帝任务是主要进项';
+      if (k === 'money' && !diag) diag = '钱入不敷出：商税/粜粮/缴获是主要进项，军饷三日一结是大头支出';
       if (k === 'wood' && !diag) diag = '木入不敷出：工匠坊耗木大，扩伐木场';
     }
   });
@@ -524,7 +541,10 @@ function renderTransport() {
 // 用户实机「没有按钮派遣平民种田」的直接原因（与 v0.3.1「坊市没了」同类：canvas 无层级，后画盖先画）。
 // 修法：选中时运输线让位，面板上移到 py=366，底行按钮收进 y≤630（日志线 y640 之上）。
 function renderBuildingPanel() {
-  const px = 1010, py = 366, pw = 256, ph = 264;
+  const px = 1010, py = 366, pw = 256;
+  // 兵营面板 v0.4.2 拆两段后内容更长：单独加高（366+276=642，仍贴日志线 640——改 274 收进 640 内）
+  const isBarracks = state.selected && gridOf(state.selected.zone) && gridOf(state.selected.zone)[state.selected.r] && gridOf(state.selected.zone)[state.selected.r][state.selected.c] && gridOf(state.selected.zone)[state.selected.r][state.selected.c].type === 'barracks';
+  const ph = isBarracks ? 272 : 264;
   if (!state.selected) {
     panel(px, py, pw, 110, '城 市 概 览');
     ctx.font = '12px sans-serif';
@@ -543,45 +563,56 @@ function renderBuildingPanel() {
   ctx.fillStyle = '#c9bd9e';
   let y = py + 42;
   if (b.type === 'barracks') {
-    // v0.3.1 三营分列（用户反馈：兵/弓/工应分别设置）——每营一行：在训进度 + 分营 −/+ 按钮
+    // v0.4.2 晚修（用户反馈"混乱不直观"）：面板拆两段——「训练营」（在训新兵，管进出）
+    // 与「在编部队」（真正上战场的兵，管布防与开销）。训练是入口、在编是家底，两个心智模型分开展示。
+    ctx.fillStyle = '#c9a45c';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('━ 训练营 · 在训 ' + b.queue.length + ' 人', px + 12, y); y += 20;
+    ctx.font = '13px sans-serif';
     const list = [['melee', '步'], ['archer', '弓'], ['engineer', '工']];
     list.forEach(function (row) {
       const q = b.queue.filter(function (x) { return x.type === row[0]; });
-      ctx.fillStyle = '#c9a45c';
-      let line = '【' + row[1] + '兵营】训' + q.length + '/' + def.capacity;
+      ctx.fillStyle = '#c9bd9e';
+      let line = row[1] + '营 ' + q.length + '/' + def.capacity + ' 席';
       if (q.length) {
         const lefts = q.map(function (x) { return x.left; });
-        line += ' 剩' + Math.min.apply(null, lefts) + '~' + Math.max.apply(null, lefts) + '日';
-      } else {
-        line += ' 空闲';
+        line += '（最快剩 ' + Math.min.apply(null, lefts) + ' 日）';
       }
       ctx.fillText(line, px + 12, y);
       drawButton(px + 164, y - 10, 40, 20, '−', false, function () { removeTrainee(b, row[0]); }, q.length <= 0);
       drawButton(px + 210, y - 10, 36, 20, '+' + row[1], false, function () { sendTrainee(b, row[0]); }, !(q.length < def.capacity && idlePop() > 0));
       y += 24;
     });
+    drawButton(px + 10, y - 8, 236, 22, '提前出营（在训按已训天数折算熟练度）', false, function () { rushConscript(b); }, b.queue.length <= 0);
+    y += 28;
     ctx.fillStyle = '#7a6f58';
     ctx.font = '11px sans-serif';
-    ctx.fillText('每营各 ' + def.capacity + ' 席 · 满训 ' + CONFIG.trainingDays + ' 日→熟练80%，训毕离营编入部队', px + 12, y); y += 16;
+    ctx.fillText('满训 ' + CONFIG.trainingDays + ' 日 → 熟练80% 自动出营，编入下方在编部队', px + 12, y); y += 18;
+    // ============ 下段：在编部队 ============
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#c9a45c';
+    ctx.fillText('━ 在编部队 · 可上战场 ' + state.troops.length + ' 人', px + 12, y); y += 20;
     ctx.font = '13px sans-serif';
     const t = state.troops;
     const nm = t.filter(x => x.type === 'melee').length, na = t.filter(x => x.type === 'archer').length, ne = t.filter(x => x.type === 'engineer').length;
-    ctx.fillStyle = '#c9bd9e';
     if (t.length) {
       const avg = t.reduce(function (s, x) { return s + x.prof; }, 0) / t.length;
       const onWall = t.filter(x => x.seg !== null).length;
-      ctx.fillText('【在编部队】' + t.length + '人·步' + nm + '弓' + na + '工' + ne + '·均熟练' + Math.round(avg) + '%', px + 12, y); y += 18;
-      ctx.fillStyle = '#8a7c5e';
-      ctx.fillText('布防：上墙' + onWall + '·预备' + (t.length - onWall) + '（点城墙段调配）', px + 12, y);
+      ctx.fillStyle = '#c9bd9e';
+      ctx.fillText('步兵 ' + nm + ' · 弓兵 ' + na + ' · 工兵 ' + ne + '（均熟练 ' + Math.round(avg) + '%）', px + 12, y); y += 18;
+      ctx.fillStyle = onWall === 0 ? '#efb63c' : '#8a7c5e';
+      ctx.fillText('布防：上墙 ' + onWall + ' · 城内预备 ' + (t.length - onWall) + '（点城墙段调配）', px + 12, y); y += 18;
     } else {
-      ctx.fillText('【在编部队】暂无——训毕的兵在此显示，驻防点城墙', px + 12, y);
+      ctx.fillStyle = '#8a7c5e';
+      ctx.fillText('暂无在编——新兵训满自动编入；也可提前出营救急', px + 12, y); y += 18;
     }
-    y += 18;
     ctx.fillStyle = state.unpaidDays > 0 ? '#ff8a7a' : '#8a7c5e';
-    ctx.fillText(state.unpaidDays > 0 ? '军饷：欠' + state.unpaidDays + ' 期（逃兵中）' : '军饷：' + CONFIG.soldierPayPerDay + '钱/兵/日·每' + CONFIG.soldierPayEveryDays + '日一结', px + 12, y); y += 18;
+    const nextPay = (CONFIG.soldierPayEveryDays - (state.day - CONFIG.startDay) % CONFIG.soldierPayEveryDays) % CONFIG.soldierPayEveryDays || CONFIG.soldierPayEveryDays;
+    ctx.fillText(state.unpaidDays > 0
+      ? '军饷 ' + CONFIG.soldierPayPerDay + '钱/兵/日【欠 ' + state.unpaidDays + ' 期，逃兵中！】'
+      : '军饷 ' + CONFIG.soldierPayPerDay + '钱/兵/日 · ' + nextPay + ' 日后一结（' + t.length * CONFIG.soldierPayPerDay * CONFIG.soldierPayEveryDays + '钱）', px + 12, y); y += 18;
     ctx.fillStyle = '#8a7c5e';
-    ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop'), px + 12, y);
-    drawButton(px + 10, py + ph - 34, 236, 24, '提前出营（全部在训按已训天数折算熟练度）', false, function () { rushConscript(b); }, b.queue.length <= 0);
+    ctx.fillText('可送训闲民：' + idlePop() + ' / 总人口 ' + getRes('pop'), px + 12, y);
     return;
   }
   if (b.type === 'workshop') {
@@ -819,7 +850,7 @@ function renderCaptivePanel() {
 function renderDecision() {
   const d = state.pendingDecision;
   if (!d || !state.paused) return;
-  const pw = 480, ph = 220, px = (W - pw) / 2, py = 150;
+  const pw = 480, ph = d.kind === 'gate' ? 250 : 220, px = (W - pw) / 2, py = 150;
   ctx.fillStyle = 'rgba(10, 8, 6, 0.6)';
   ctx.fillRect(0, 56, W, H - 56 - CONFIG.view.logH);
   panel(px, py, pw, ph, '');
@@ -832,9 +863,11 @@ function renderDecision() {
   let title = '', lines = [], yes = '', no = '';
   if (d.kind === 'gate') {
     title = '【骚扰期的门】匈奴游骑在城外劫掠';
+    const reserve = state.troops.filter(function (t) { return t.seg === null; }).length;
     lines = ['开门：商路不断，但小股铁骑会冲入城内抢粮抢钱杀人',
       '（单次上限：粮 ' + Math.round(CONFIG.raidLootGrainCap * 100) + '% · 钱 ' + Math.round(CONFIG.raidLootMoneyCap * 100) + '%，抢完即走）',
-      '关门：只扰城外——劫粮道/杀城外平民/烧烽燧（收保可免伤亡）'];
+      '关门：只扰城外——劫粮道/杀城外平民/烧烽燧（收保可免伤亡）',
+      '出城迎击（v0.4.2）：预备队 ' + reserve + ' 人野战——胜=产地无损+缴获，败=折损≤' + Math.round(CONFIG.raidSortieLossCap * 100) + '%'];
     yes = '开门（赌一把）'; no = '关门（固守）';
   } else if (d.kind === 'curfew') {
     title = '【宵禁】夜闭城门，商队 ' + state.merchants + ' 人求入';
@@ -876,6 +909,11 @@ function renderDecision() {
   lines.forEach(function (t, i) { ctx.fillText(t, px + 24, py + 58 + i * 21); });
   drawButton(px + 40, py + ph - 52, 190, 32, yes, false, function () { answerDecision(true); });
   drawButton(px + pw - 230, py + ph - 52, 190, 32, no, false, function () { answerDecision(false); });
+  // v0.4.2 第三选项：骚扰门决策可出城迎击（预备队野战，御敌于外保产地）
+  if (d.kind === 'gate') {
+    const reserve = state.troops.filter(function (t) { return t.seg === null; }).length;
+    drawButton(px + (pw - 200) / 2, py + ph - 92, 200, 32, '⚔ 出城迎击（预备队 ' + reserve + ' 人）', false, function () { answerDecision('sortie'); }, reserve <= 0);
+  }
 }
 function renderGameOver() {
   if (!state.gameOver) return;
@@ -1039,15 +1077,20 @@ function renderBattleUnits() {
 function renderBattlePanel() {
   const px = 1010, py = 70, pw = 256;
   const S = Battle.S, RC = Battle.RTS_CONFIG;
-  panel(px, py, pw, 52, '战 况');
+  panel(px, py, pw, 62, '战 况');
   ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillStyle = '#c9bd9e';
   ctx.fillText((S.paused ? '⏸ 暂停（仍可下令）' : '▶ ×' + RC.speeds[S.speedIdx]) + '   ' + Math.floor(S.t) + 's', px + 12, py + 30);
   ctx.fillStyle = '#8a7c5e';
   ctx.fillText('敌 ' + S.enemies.length + '   涌城 ' + S.insideEnemies.size + '/' + RC.ai.floodInsideLose + '   操作 ' + S.ops, px + 12, py + 46);
-  // 两门血条
+  // v0.4.2 晚（用户反馈"大地图看不见，只能看见前城门"）：视角切换从暗知识（Z 键）升级为面板明按钮
+  drawButton(px + 150, py + 22, 96, 26, camera.mode === 'battle' ? '🗺 全景（Z）' : '⚔ 近景（Z）', camera.mode !== 'battle', function () {
+    setCamera(camera.mode === 'overview' ? 'battle' : 'overview', camera.focusSeg);
+    pushLog('视角：' + (camera.mode === 'battle' ? '战斗档（推近 ×' + camera.zoom.toFixed(2) + '，Z/X 切换）' : '全景档（×' + camera.zoom.toFixed(2) + '，看全局）'));
+  });
+  // 两门血条（v0.4.2 下移避让视角按钮：y py+60→py+74）
   Battle.GATES.forEach(function (g, i) {
-    const y = py + 60 + i * 24;
+    const y = py + 74 + i * 24;
     ctx.fillStyle = '#8a7c5e'; ctx.font = '12px sans-serif';
     ctx.fillText(g.label, px + 12, y + 8);
     ctx.fillStyle = '#3a2f22'; ctx.fillRect(px + 58, y + 2, 174, 8);
@@ -1056,7 +1099,7 @@ function renderBattlePanel() {
     ctx.fillRect(px + 58, y + 2, 174 * f, 8);
   });
   // 部队卡（点击选中）
-  let y = py + 116;
+  let y = py + 130;
   panel(px, y, pw, 32 + S.teams.length * 44, '部 队');
   S.teams.forEach(function (t, i) {
     const cy = y + 28 + i * 44, sel = Battle.isSelected(t.id);
