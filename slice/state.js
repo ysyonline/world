@@ -45,6 +45,7 @@ const state = {
   walkers: [],           // 走路实体 {kind:'carry'|'recall'|'resume'|'merchant', x,y, path:[{x,y}], t, speed, color, cargo?, from?, bRef?}
   curfewPolicy: 'ask',   // 宵禁三态政策：'open'常开 | 'closed'常闭 | 'ask'每晚询问（默认）
   taxLevel: 1,           // 口钱档位索引（CONFIG.taxLevels，默认 1=轻赋；v0.4.2 月度人头税）
+  sellGrain: false,      // 市坊粜粮开关（v0.4.2 经济断层修复：口粮线以上余粮日结变现）
   innStay: false,        // 商人昨夜是否宿驿站（次日商税减半）
   recalled: false,       // 收保状态：true=城外平民已撤回（停产安全）
   merchants: 0,          // 在岗商人（建市坊自动抽闲民）
@@ -95,6 +96,7 @@ function autoSaveCheck() {
         inv: state.inv, walkers: state.walkers, curfewPolicy: state.curfewPolicy, taxLevel: state.taxLevel, merchants: state.merchants,
         recalled: state.recalled, ledger: state.ledger, captives: state.captives, task: state.task,
         nextTaskDay: state.nextTaskDay, waveFired: state.waveFired, rngState: state.rngState, unpaidDays: state.unpaidDays,
+        sellGrain: state.sellGrain,
       }));
       pushLog('【存档】总攻前夜——已自动存档（战败可读档重打）');
     } catch (e) { /* 快照失败不阻断游戏 */ }

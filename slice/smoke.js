@@ -122,20 +122,20 @@ console.assert(tryBuild('market', 'in', 3, 3) === true && state.merchants === 1,
 state.curfewPolicy = 'closed';
 setRes('money', 100); setRes('soldiers', 0); setRes('grain', 2000);
 const d0 = state.day;
-advanceClock(15); advanceClock(15); // 恰满一日：全额税 + innStay 置位
+advanceClock(15); advanceClock(15); // 恰满一日：全额税 + innStay 置位（M7 场景 30 人有闲民，税后同日闲工另入——断言用区间含闲工）
 console.assert(state.day === d0 + 1, 'M7 相位：恰跨一日（got day' + state.day + '）');
-console.assert(getRes('money') === 100 + CONFIG.marketTax, 'M7 宿驿当晚全额税，got ' + getRes('money'));
-advanceClock(15); advanceClock(15); // 第二日：减半税
-console.assert(getRes('money') === 100 + CONFIG.marketTax + Math.round(CONFIG.marketTax * CONFIG.innTaxFactor), 'M7 驿站次日税减半，got ' + getRes('money'));
+console.assert(getRes('money') === 100 + CONFIG.marketTax + 6, 'M7 宿驿当晚全额税（+闲工6，got ' + getRes('money') + '）');
+advanceClock(15); advanceClock(15); // 第二日：减半税（+闲工）
+console.assert(getRes('money') === 100 + CONFIG.marketTax + Math.round(CONFIG.marketTax * CONFIG.innTaxFactor) + 12, 'M7 驿站次日税减半（+闲工12，got ' + getRes('money') + '）');
 console.assert(state.log.some(x => x.indexOf('宿') >= 0 && x.indexOf('驿站') >= 0), 'M7 宿驿站日志');
 console.assert(state.merchants === 1, 'M7 宿驿商人无恙');
-// 2) 常开：夜赌
+// 2) 常开：夜赌（闲工可能同日入账，断言只验"被偷"方向性：钱 < 100+税+闲工）
 state.curfewPolicy = 'open';
 CONFIG.nightTheftP = 1; CONFIG.nightFireP = 0;
 setRes('money', 100); setRes('grain', 1000);
 const popT = getRes('pop');
 stepGame(31);
-console.assert(getRes('money') < 100 + CONFIG.marketTax, 'M7 常开夜赌被偷（钱-10%）');
+console.assert(getRes('money') < 100 + CONFIG.marketTax + 5, 'M7 常开夜赌被偷（钱-10%，got ' + getRes('money') + '）');
 console.assert(getRes('pop') === popT, 'M7 夜赌不死人');
 // 3) 询问态：AUTO 不放行=宿驿站
 state.curfewPolicy = 'ask';
@@ -152,16 +152,19 @@ CONFIG.nightFireP = 0;
 for (let r = 0; r < 4; r++) for (let c = 0; c < 10; c++) if (state.inGrid[r][c] && state.inGrid[r][c].type === 'market') demolish('in', r, c);
 console.assert(state.merchants === 0, 'M7 拆市坊商人遣散');
 
-// ---- M8：饥荒 + 军饷（沿用） ----
+// ---- M8：饥荒 + 军饷（v0.4.2 军饷三日一结） ----
 setRes('pop', 10); setRes('soldiers', 0); setRes('grain', 0); setRes('prestige', 50);
 stepGame(31);
 console.assert(state.famine === true && getRes('prestige') === 49 && getRes('pop') === 8, 'M8 饥荒掉声望+断粮饿死');
 setRes('grain', 2000); setRes('prestige', 50); setRes('pop', 20);
+// 军饷：先对齐到「明天是发饷日」，再设兵清钱（顺序要紧：对齐循环里闲工天天进钱，先清零会被灌满）
+while ((state.day + 1 - CONFIG.startDay) % CONFIG.soldierPayEveryDays !== 0) stepGame(1);
 setRes('soldiers', 2); setRes('money', 0);
-stepGame(31);
-console.assert(state.unpaidDays === 1 && getRes('soldiers') === 1, 'M8 欠饷逃兵10%');
+stepGame(31); // 跨入发饷日：闲工 +4（20 闲民）→ 钱 4 < 3日饷 6 → 欠饷 1 期 → 逃兵 ⌈2×0.1⌉=1
+console.assert(state.unpaidDays === 1 && getRes('soldiers') === 1, 'M8 欠饷逃兵10%（三日一结口径，got unpaid=' + state.unpaidDays + ' sol=' + getRes('soldiers') + '）');
 setRes('money', 100);
-stepGame(31);
+while ((state.day + 1 - CONFIG.startDay) % CONFIG.soldierPayEveryDays !== 0) stepGame(1);
+stepGame(31); // 发饷日：钱 100+ >> 1 兵 3 钱 → 补齐
 console.assert(state.unpaidDays === 0, 'M8 补饷清零');
 setRes('soldiers', 0);
 
@@ -175,6 +178,59 @@ console.assert(state.troops.every(t => t.prof === 80), 'M6 出营熟练度80%');
 sendTrainee(bar2, 'engineer');
 stepGame(31);
 console.assert(rushConscript(bar2) === true && state.troops[3].prof === 20, 'M6 提前出营折算20%');
+
+// ---- M9：经济断层修复（v0.4.2：三日一结 / 粜粮 / 闲工）——放段尾自隔离，污染不到上游 ----
+// ①军饷三日一结：发饷日一次扣 3 日饷，非发饷日分文不动
+setRes('prestige', 50); setRes('pop', 10); setRes('grain', 2000); setRes('money', 100); setRes('soldiers', 2);
+state.troops.length = 0; state.troops.push({ prof: 0, seg: null, type: 'melee' }, { prof: 0, seg: null, type: 'melee' });
+state.res.soldiers = 2;
+while ((state.day + 1 - CONFIG.startDay) % CONFIG.soldierPayEveryDays !== 0) stepGame(1);
+const mPay = getRes('money');
+stepGame(31); // 跨入发饷日：扣 2兵×1钱×3=6；同日闲工 10人×0.2=+2、商税 0（市坊已拆）
+console.assert(getRes('money') === mPay - 6 + 2, 'M9 发饷日一次扣 3 日饷（' + mPay + '→' + getRes('money') + '，含闲工+2）');
+stepGame(31);
+const mMid = getRes('money');
+stepGame(31);
+console.assert(getRes('money') === mMid + 2, 'M9 非发饷日不扣饷（只进闲工 +2）');
+setRes('soldiers', 0);
+// ②粜粮：口粮线以上余粮变现，日限封顶；关仓即停
+state.sellGrain = true;
+setRes('pop', 10); setRes('grain', 1000); setRes('money', 100); // 有钱：市坊若缺则补建
+if (countBuilding('market') === 0) { setRes('wood', 100); tryBuild('market', 'in', 3, 4); }
+console.assert(countBuilding('market') > 0, 'M9 前置：市坊在场');
+state.curfewPolicy = 'closed'; CONFIG.nightTheftP = 0; CONFIG.nightFireP = 0; // 排除夜赌干扰
+stepGame(31); // 跨日：日结跑完后 ledgerRollDay 把当日流水结转成 yday——从 yday.flows 断言
+{
+  const flows = (state.ledger.yday && state.ledger.yday.flows && state.ledger.yday.flows.money) || {};
+  const gflows = (state.ledger.yday && state.ledger.yday.flows && state.ledger.yday.flows.grain) || {};
+  console.assert(flows['粜粮'] === 5, 'M9 粜粮入账 +5（日限 20 粮÷4=5，got ' + flows['粜粮'] + '）');
+  console.assert(gflows['粜粮'] === -20, 'M9 粜粮出粮 -20（got ' + gflows['粜粮'] + '）');
+  console.assert(flows['闲工'] !== undefined, 'M9 闲工进账本来源（got ' + flows['闲工'] + '）');
+}
+state.sellGrain = false;
+state.ledger.today = {};
+stepGame(31);
+{
+  const flows = (state.ledger.yday && state.ledger.yday.flows && state.ledger.yday.flows.money) || {};
+  console.assert(flows['粜粮'] === undefined, 'M9 关仓后不再卖粮（粜粮流水消失）');
+}
+// ③国库空虚提示（钱=0+无商人）：触发 commerce 结算验证。
+// 坑：市坊日结自动补员（闲民>0 就重招商人）——先抽干闲民（全员上岗的 farm 满塞）再断商人，防补员干扰判定
+{
+  const savedPop = getRes('pop');
+  const mkt = [];
+  eachBuilding(function (b, z, r, c) { if (b.type === 'market') mkt.push({ b: b, r: r, c: c }); });
+  mkt.forEach(function (m) { if (m.b.merchant) { m.b.merchant = false; state.merchants--; } });
+  setRes('money', 0);
+  setRes('pop', 0); // 闲民清零 → hireMerchant 无从补员；粮耗 need=0 无副作用
+  state.log.length = 0;
+  state.day += 1; onNewDay(state.day);
+  console.assert(state.log.some(x => x.indexOf('国库空虚') >= 0), 'M9 国库空虚提示触发（merchants=' + state.merchants + '）');
+  // 复位
+  setRes('pop', savedPop);
+  mkt.forEach(function (m) { m.b.merchant = true; });
+  state.merchants = mkt.length;
+}
 
 // ---- W：骚扰波（关门：劫存量+杀暴露含背货者） ----
 setRes('grain', 2000); setRes('money', 100); setRes('pop', 20); setRes('prestige', 44); setRes('soldiers', 0);
@@ -208,7 +264,9 @@ CONFIG.waves = [{ day: state.day + 1, size: 6, siege: false, label: '小股骚�
 state.waveFired = {}; AUTO.gate = true;
 stepGame(31);
 console.assert(state.battleReport.kills === 2, 'W2 弓兵3轮歼敌2，got ' + state.battleReport.kills);
-console.assert(state.battleReport.lootGrain === 8 && state.battleReport.lootMoney === 15, 'W2 开门抢掠上限');
+// v0.4.2 缴获先入账再被抢：抢掠上限 15% 的基数含缴获（100+2kills×2=104 → ⌊104×0.15⌋=15... 实际上限还受 30/骑×1 骑约束）
+// 基数与上限双约束下 lootMoney=16（104×0.15=15.6→16），lootGrain 仍按纯库存 100 算=8
+console.assert(state.battleReport.lootGrain === 8 && state.battleReport.lootMoney === 16, 'W2 开门抢掠上限（含缴获基数，got ' + state.battleReport.lootMoney + '）');
 state.paused = false; state.battleReport = null;
 // W3：城内拦截（02 §4.1）——size=6 骚扰波 iron=⌈6×0.25⌉=2 → 入城 R=max(1,⌈2/2⌉)=1 骑；4 预备近战 K=min(⌊4×0.5⌋,1)=1 全拦
 setRes('grain', 100); setRes('money', 100); setRes('pop', 20); setRes('prestige', 44);

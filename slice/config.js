@@ -59,8 +59,10 @@ const CONFIG = {
   profPowerSpan: 0.4,
   profBattleSurvive: 3,   // 存活一场 +3%
   profPerKill: 0.5,       // 每杀敌 +0.5%（参与者分摊；器械击杀归操作工兵——P2⑥占位）
-  // 军饷与欠缴（占位）
+  // 军饷与欠缴（v0.4.2 改三日一结：日结 1钱/兵/日 ×瞬时现金流 → 账本只剩噪声，玩家看不到"养兵成本"的形状；
+  // 三日一结 3钱/兵 使军饷成为账本可见的节奏事件，与商税/口钱同量级可对账）
   soldierPayPerDay: 1,
+  soldierPayEveryDays: 3,  // 每 3 日一结（日结强度不变，只改结算颗粒度）
   desertBase: 0.10,
   desertPerDay: 0.05,
   // 城墙分段（08 §3 定案：两门 + 门侧可攀墙 = 4 段；左右天险不设段）；几何见 map.segs
@@ -71,7 +73,7 @@ const CONFIG = {
   // —— 08 §6 第 4 步：跨层接口（战前快照 / 战后回写）——
   assaultMode: 'live',    // 'live'=总攻进实时战场（浏览器默认）｜'turnbased'=委托将领回合制结算（无头回归 playtest/trace 走这条）
   assaultGateBrokenPrestige: 2, // 每破一门额外扣声望 [PLACEHOLDER：取打赢声望 +10 的 1/5，避免"破一门=等于白打"]
-  assaultLootPerKill: 0,        // 战利品：每歼敌缴获钱 [PLACEHOLDER·挂 EA，与俘虏机制联动；默认 0=只留接口不进水]
+  assaultLootPerKill: 2,        // 战利品：每歼敌缴获钱（v0.4.2 开启：实时路径原挂 EA 的接口接上——战斗给经济正反馈，14 敌全歼=28 钱≈兵营 9 日饷）[PLACEHOLDER·无头回测定]
   invaderDemolishP: 0.25,       // 入城敌每名毁 1 座城内建筑的概率 [PLACEHOLDER]
   liveSkillCost: { log: 1, oil: 1 }, // 战中技能消耗工匠坊库存：檑木/火油各 1 份；修门同 repairGate 价（土20木5）
   // 敌波次日程（02 §3 三层节奏，占位）
@@ -112,6 +114,7 @@ const CONFIG = {
   raidKillPopPerRider: 1, // 入城铁骑杀人（上限 3）
   raidKillPopMax: 3,
   raidLootPrestige: 3,    // 被抢掠声望损失
+  raidLootPerKill: 2,     // 城头歼敌缴获 钱/敌（布防收益变现：W 段 size6 波全歼≈12 钱 ≈ 兵营日饷口径）[PLACEHOLDER·无头回测定]
   interceptCoef: 0.5,     // 城内拦截系数 I（02 §4.1）：预备近战以逸待劳吃掉一半铁骑 [PLACEHOLDER]
   interceptLoss: 0.4,     // 拦截交换损耗：每拦 K 骑阵亡 ⌊K×0.4⌋ 近战（永久减人口）[PLACEHOLDER]
   raidFieldRobRate: 0.25, // 关门：劫粮道=城外各产地存量被抢比例
@@ -142,6 +145,19 @@ const CONFIG = {
     { key: 'harsh',  label: '苛赋', perHead: 4, prestige: -6, note: '亡者相随' },
   ],
   innTaxFactor: 0.5,      // 驿站过夜：次日商税 ×0.5（误早市）
+  // ---- 粜粮（v0.4.2 经济断层修复：粮↔钱兑换通道，2026-10-07）----
+  // 背景：trace-v04 D40 粮 384 爆仓、钱 72 见底——资源间无兑换通道，扩田对钱零帮助。
+  // 设计：市坊手动开关（默认关）。开启后每日结一次，卖出「口粮线以上」余粮：
+  //   可卖 = min(粮存 − need×keepDays, maxPerDay)，x = grainSellRatio 粮换 1 钱
+  // 锚：4 粮=1 钱 → 满岗农田(5人×20粮)满产日 ≈ 25 钱 ≈ 一座市坊税——种田与经商同量级不同形
+  //   （农田要人+地+运输税，市坊只占 1 商人；同量级才有"种田卖钱 vs 专职经商"的真决策）
+  // 制衡：①卖的是饥荒保险，粜多了 D26/33 骚抢直接砸手里 ②每日限 20 粮=+5 钱，低于商税——不会取代商业
+  grainSellRatio: 4,      // 4 粮 = 1 钱（低于粮的机会成本——饿死 2 人损失远超 5 钱）
+  grainSellKeepDays: 5,   // 保底口粮：need×5 日之内的粮不卖（> famineBufferDays 3，留饥荒缓冲）
+  grainSellMaxPerDay: 20, // 每日卖出上限（+5 钱/日封顶：变现通道，不是印钞机）
+  idleEarnPerCap: 0.2,    // 闲工：每闲民每日打零工 +0.2 钱（10 闲民=+2/日；破产救援而非收入流）
+  // [PLACEHOLDER·无头回测定] 闲工锚：破产边缘（钱0+无商人）时 30 闲民=+6/日，30 日攒 180——能重建但不舒服，
+  // 永远到不了"养闲人比派工划算"（1 农民日产 4 粮=1 钱 + 0.25 粮结余 ≈ 1.06 钱 > 0.2）
   nightTheftP: 0.15,      // 夜赌·偷盗概率（放行才触发）
   nightTheftMoney: 0.10,  // 偷盗：钱 -10%
   nightTheftGrain: 0.05,  // 粮 -5%
@@ -174,7 +190,7 @@ const CONFIG = {
     house:    { label: '民房',   zone: 'in', cost: { money: 20, wood: 10 },           capacity: 0 }, // 每座容5平民
     workshop: { label: '工匠坊', zone: 'in', cost: { money: 60, wood: 30, iron: 5 },  capacity: 3 }, // 产檑木/火油/重弩
     barracks: { label: '兵营',   zone: 'in', cost: { money: 60, wood: 30 },           capacity: 6 }, // 三营同建，全关隘限一座（v0.3 调参：70→60 保 D8~D12 可建成）
-    market:   { label: '市坊',   zone: 'in', cost: { money: 50, wood: 20 },           capacity: 0 }, // 商人自动经营，税直入库
+    market:   { label: '市坊',   zone: 'in', cost: { money: 50, wood: 20 },           capacity: 0 }, // 商人自动经营，税直入库（v0.4.2 兼粜粮变现口）
   },
   // 工匠坊产物（切换生产；耗料/个，满岗日产）
   workshopProducts: {

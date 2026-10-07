@@ -179,7 +179,23 @@ function todayEstimate() { // 今日预估：口粮/军饷按当前人口兵额�
   const est = {};
   const need = (getRes('pop') + getRes('soldiers') * CONFIG.soldierGrainMult) * CONFIG.grainPerCapita;
   est.grain = (est.grain || 0) - need;
+  // 军饷按日均摊（三日一结只改结算颗粒度，强度仍是 1钱/兵/日）——否则非发饷日预估虚高
   est.money = (est.money || 0) - getRes('soldiers') * CONFIG.soldierPayPerDay;
+  // 口钱日均摊（v0.4.2 口径修补）：月结 30 日摊到每天，否则预估列天天漏掉这笔基线收入
+  est.money += getRes('pop') * CONFIG.taxLevels[state.taxLevel].perHead / CONFIG.taxMonthDays;
+  // 粜粮（开仓时按当前余粮估一日的量）
+  if (state.sellGrain) {
+    const gNeed = need;
+    const excess = Math.floor(getRes('grain') - gNeed * CONFIG.grainSellKeepDays);
+    if (excess > 0) {
+      const sell = Math.min(excess, CONFIG.grainSellMaxPerDay);
+      const earn = Math.floor(sell / CONFIG.grainSellRatio);
+      est.money += earn;
+      est.grain = (est.grain || 0) - earn * CONFIG.grainSellRatio;
+    }
+  }
+  // 闲工：闲民打零工的日均进项（破产救援线，进预估防"账面看着更死"）
+  est.money += idlePop() * CONFIG.idleEarnPerCap;
   let tax = 0;
   eachBuilding(function (b) { if (b.type === 'market' && b.merchant) tax += CONFIG.marketTax; });
   est.money += tax;
@@ -207,20 +223,26 @@ function renderLedger() {
   y += 18;
   const est = todayEstimate();
   const yd = state.ledger.yday;
-  LEDGER_KEYS.forEach(function (k) {
+  LEDGER_KEYS.forEach(function (k, idx) {
     const net = yd && yd.net ? (yd.net[k] || 0) : 0;
     const flows = state.ledger.today[k] || {};
-    const fStr = Object.keys(flows).filter(function (s) { return Math.abs(flows[s]) >= 0.05; }).map(function (s) { return s + (flows[s] > 0 ? '+' : '') + Math.round(flows[s] * 10) / 10; }).join(' ') || '—'; // v0.3.1 过滤零值条目（防"其他 0"残留显示）
+    // v0.4.2 流水可见性修补：原单行 20 字符截断把军饷/建造/任务大头全砍掉（"看不出为啥为负"的直接原因）。
+    // 改两行制：净额行 + 来源明细独占一行（11px，可用 ~254px ≈ 34 字，仍超截断但大头保住）。
+    const srcs = Object.keys(flows).filter(function (s) { return Math.abs(flows[s]) >= 0.05; });
+    const fStr = srcs.map(function (s) { return s + (flows[s] > 0 ? '+' : '') + Math.round(flows[s] * 10) / 10; }).join(' ') || '—';
     const e = Math.round((est[k] || 0) * 10) / 10;
     ctx.fillStyle = '#c9bd9e';
     ctx.fillText(RES_LABEL[k], x + 12, y);
     ctx.fillStyle = net > 0 ? '#a8c98a' : (net < 0 ? '#ff8a7a' : '#8a7c5e');
     ctx.fillText((net > 0 ? '+' : '') + Math.round(net * 10) / 10, x + 68, y);
-    ctx.fillStyle = '#a89f88';
-    ctx.fillText(fStr.length > 20 ? fStr.slice(0, 20) + '…' : fStr, x + 118, y);
     ctx.fillStyle = e >= 0 ? '#a8c98a' : '#efb63c';
     ctx.fillText((e > 0 ? '+' : '') + e, x + 320, y);
-    y += 20;
+    y += 16;
+    ctx.fillStyle = '#a89f88';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(fStr.length > 34 ? fStr.slice(0, 34) + '…' : fStr, x + 68, y);
+    ctx.font = '12px sans-serif';
+    y += 18;
   });
   // 诊断
   ctx.fillStyle = '#8a7c5e';
@@ -556,7 +578,7 @@ function renderBuildingPanel() {
     }
     y += 18;
     ctx.fillStyle = state.unpaidDays > 0 ? '#ff8a7a' : '#8a7c5e';
-    ctx.fillText(state.unpaidDays > 0 ? '军饷：欠' + state.unpaidDays + '日（逃兵中）' : '军饷：' + state.payNeed + '钱/日·已发齐', px + 12, y); y += 18;
+    ctx.fillText(state.unpaidDays > 0 ? '军饷：欠' + state.unpaidDays + ' 期（逃兵中）' : '军饷：' + CONFIG.soldierPayPerDay + '钱/兵/日·每' + CONFIG.soldierPayEveryDays + '日一结', px + 12, y); y += 18;
     ctx.fillStyle = '#8a7c5e';
     ctx.fillText('闲民：' + idlePop() + ' / 民 ' + getRes('pop'), px + 12, y);
     drawButton(px + 10, py + ph - 34, 236, 24, '提前出营（全部在训按已训天数折算熟练度）', false, function () { rushConscript(b); }, b.queue.length <= 0);
@@ -582,6 +604,17 @@ function renderBuildingPanel() {
   if (b.type === 'market') {
     ctx.fillText('商人：' + (b.merchant ? '在岗' : '停摆（等补员）'), px + 12, y); y += 20;
     ctx.fillText('商税：' + CONFIG.marketTax + ' 钱/日（直入库）' + (state.innStay ? ' · 明日减半(宿驿站)' : ''), px + 12, y); y += 20;
+    // 粜粮开关（v0.4.2）：默认关——卖的是饥荒保险，开不开是玩家对"钱荒 vs 粮荒"的判断
+    const need = (getRes('pop') + getRes('soldiers') * CONFIG.soldierGrainMult) * CONFIG.grainPerCapita;
+    const excess = Math.max(0, Math.floor(getRes('grain') - need * CONFIG.grainSellKeepDays));
+    ctx.fillText('粜粮：' + (state.sellGrain ? '开（今可卖 ' + Math.min(excess, CONFIG.grainSellMaxPerDay) + ' 粮 → +' + Math.floor(Math.min(excess, CONFIG.grainSellMaxPerDay) / CONFIG.grainSellRatio) + ' 钱）'
+      : '关（余粮 ' + excess + ' 担可变现）'), px + 12, y);
+    drawButton(px + 158, y - 10, 86, 20, state.sellGrain ? '停止粜粮' : '开仓粜粮', state.sellGrain, function () {
+      state.sellGrain = !state.sellGrain;
+      pushLog(state.sellGrain ? '【粜粮】开仓：每日卖出 ' + CONFIG.grainSellKeepDays + ' 日口粮线以上余粮（' + CONFIG.grainSellRatio + ' 粮=1 钱，日限 ' + CONFIG.grainSellMaxPerDay + ' 粮）'
+        : '【粜粮】闭仓：余粮留存备战荒');
+    });
+    y += 22;
     ctx.fillStyle = '#8a7c5e';
     ctx.fillText('午后出城进迷雾进货，夜间回城', px + 12, y); y += 18;
     ctx.fillText('常闭→宿驿站税减半；骚扰日宿驿站仍可被杀', px + 12, y);

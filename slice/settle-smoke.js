@@ -150,7 +150,7 @@ ok(before.logs - sum(state.segLogs) === rep.skillUse.log, '④ 檑木按段扣�
 ok(before.oil - sum(state.segOil) === rep.skillUse.oil, '④ 火油按段扣：减少 ' + (before.oil - sum(state.segOil)) + ' == 投放 ' + rep.skillUse.oil + ' 次');
 ok(before.res.grain === getRes('grain'), '⑤ 战斗期经营冻结：粮不动');
 ok(before.res.iron === getRes('iron'), '⑤ 铁不动');
-ok(before.res.money === getRes('money') + 0, '⑤ 钱不动（战利品默认 0，挂 EA）');
+ok(before.res.money === getRes('money') - Math.round(rep.kills * CONFIG.assaultLootPerKill), '⑤ 战利品入账：钱 +' + Math.round(rep.kills * CONFIG.assaultLootPerKill) + '（v0.4.2 开启，rep.kills=' + rep.kills + '）');
 ok(before.res.soil - getRes('soil') === rep.skillUse.repair * CONFIG.gateRepairSoil, '⑤ 土只因抢修减少（' + rep.skillUse.repair + '×' + CONFIG.gateRepairSoil + '）');
 ok(before.res.wood - getRes('wood') === rep.skillUse.repair * CONFIG.gateRepairWood, '⑤ 木只因抢修减少（' + rep.skillUse.repair + '×' + CONFIG.gateRepairWood + '）');
 const brokenN = rep.gates.filter(function (g) { return g.broken; }).length;

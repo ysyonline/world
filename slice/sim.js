@@ -310,6 +310,25 @@ function hireMerchant(b) {
   b.merchant = true;
   state.merchants += 1;
 }
+// 粜粮（v0.4.2 经济断层修复）：市坊开关 state.sellGrain，日结时按「口粮线以上余粮」变现。
+// 可卖 = min(粮存 − need×keepDays, maxPerDay)，向下取整到 grainSellRatio 的倍数 → 钱 = 卖量/ratio。
+// 设计要点：①卖的是饥荒保险（keepDays=5 > famineBufferDays=3）②日限 20 粮=+5 钱封顶，低于商税——变现口而非印钞机。
+function sellGrainDaily() {
+  if (!state.sellGrain) return 0;
+  const need = (getRes('pop') + getRes('soldiers') * CONFIG.soldierGrainMult) * CONFIG.grainPerCapita;
+  const excess = Math.floor(getRes('grain') - need * CONFIG.grainSellKeepDays);
+  if (excess <= 0) {
+    if (state.day % 5 === 0) pushLog('【粜粮】余粮不足 ' + CONFIG.grainSellKeepDays + ' 日口粮线，暂停卖出');
+    return 0;
+  }
+  const sell = Math.min(excess, CONFIG.grainSellMaxPerDay);
+  const earn = Math.floor(sell / CONFIG.grainSellRatio);
+  if (earn <= 0) return 0;
+  LEDGER_SRC = '粜粮';
+  addRes('grain', -earn * CONFIG.grainSellRatio); // 只扣实际卖出的（整倍数）
+  addRes('money', earn);                          // 调用方（commerce）已把 earn 累进税额——这里直接入账，返回值仅供日志/提示
+  return 0; // 返回 0：防止 commerce 再加一遍（双计）
+}
 // 商税直入库（日结）+ 停摆市坊自动补员 + 驿站减半结算（v0.3 三态政策）
 dailySettlers.push(function commerce(day) {
   let tax = 0;
@@ -318,14 +337,32 @@ dailySettlers.push(function commerce(day) {
     if (!b.merchant) hireMerchant(b); // 池子有人就自动补
     if (b.merchant) tax += CONFIG.marketTax;
   });
+  if (state.sellGrain && state.merchants > 0) sellGrainDaily(); // 粜粮（v0.4.2）：任一在岗商人即可变现，每日全局一次（钱粮都在函数内直接入账）
   if (state.innStay && tax > 0) {
     tax = Math.round(tax * CONFIG.innTaxFactor);
     pushLog('【驿站】商队昨夜宿驿站误早市，今日商税减半');
   }
   state.innStay = false;
   if (tax > 0) { LEDGER_SRC = '商税'; addRes('money', tax); LEDGER_SRC = null; pushLog('商税入库 钱+' + tax); }
+  // 国库空虚显性提示（v0.4.2 经济断层修复）：钱=0 且市坊无在岗商人 = 账面已死锁——
+  // 把逃生通道（拆建筑返半价、闲工、粜粮）从暗知识变明牌，防"钱怎么没了"的困惑
+  if (getRes('money') <= 0 && state.merchants <= 0 && !state.gameOver) {
+    pushLog('【国库空虚】无商税进项：可拆建筑返半价应急、闲民打零工（+' + CONFIG.idleEarnPerCap + '钱/人/日）、开市坊粜粮');
+  }
 });
-// 月度人头税·口钱（v0.4.2，2026-10-07 用户裁决；01 §3.4.3）：每 30 日按人口征一次。
+// 闲工（v0.4.2 经济断层修复）：闲民打零工，每闲民 +idleEarnPerCap 钱/日。
+// 定位是破产救援而非收入流（锚见 CONFIG 注释）：10 闲民=+2/日，跑不赢任何正式岗位。
+// 记账走「闲工」独立来源——破产边缘的账本要能看到这条活路在进钱。
+dailySettlers.push(function oddJobs(day) {
+  const idle = idlePop();
+  if (idle <= 0) return;
+  const earn = Math.round(idle * CONFIG.idleEarnPerCap * 10) / 10; // 保留一位小数，日结按实际入账
+  if (earn <= 0) return;
+  LEDGER_SRC = '闲工';
+  addRes('money', earn);
+  LEDGER_SRC = null;
+});
+// ---- 口钱·月度人头税（v0.4.2，2026-10-07 用户裁决；01 §3.4.3）：每 30 日按人口征一次。 ----
 // 税基 = 平民全员（含闲民/商人）——汉制算赋人人缴；士兵纳粮不纳税（戍卒廪食，军饷另发）。
 // 滑杆制衡：税钱与声望反向（CONFIG.taxLevels），重赋月月掉声望 → 跌破流民线 45 → 税基萎缩。
 dailySettlers.push(function pollTax(day) {
@@ -401,12 +438,15 @@ dailySettlers.push(function consume(day) {
     pushLog('【断粮】口粮缺口 ' + (need - eaten) + '，饿死 ' + dead + ' 人！');
   }
 });
-// 军饷（日结⑤，沿用欠饷天数梯度）
+// 军饷（日结⑤，v0.4.2 改三日一结：soldierPayEveryDays）——日结强度不变（1钱/兵/日），只改结算颗粒度：
+// 发饷日一次性扣 3 日饷；非发饷日照常累计欠饷与逃兵（钱不够发按旧梯度，缺额=need-paid）。
 dailySettlers.push(function pay(day) {
   const sol = getRes('soldiers');
-  const need = sol * CONFIG.soldierPayPerDay;
-  state.payNeed = need;
+  const need = sol * CONFIG.soldierPayPerDay * CONFIG.soldierPayEveryDays; // 一次性 3 日饷
+  state.payNeed = sol * CONFIG.soldierPayPerDay;                           // HUD/兵营面板仍显示日强度
   if (sol <= 0) { state.unpaidDays = 0; return; }
+  const payday = (day - CONFIG.startDay) % CONFIG.soldierPayEveryDays === 0;
+  if (!payday) return; // 非发饷日不扣款（账本干净；欠饷只在发饷日判定）
   const paid = Math.min(getRes('money'), need);
   LEDGER_SRC = '军饷';
   addRes('money', -paid);
@@ -708,6 +748,9 @@ function resolveRaid(wave, gateOpen) {
   } else {
     rep.captives = 0;
   }
+  // 城头歼敌缴获（v0.4.2）：布防收益变现——弓弩打下来的都是钱与马，不再白打
+  rep.loot = Math.round(rep.kills * CONFIG.raidLootPerKill);
+  if (rep.loot > 0) { LEDGER_SRC = '缴获'; addRes('money', rep.loot); LEDGER_SRC = null; }
   const participants = archers.concat(engineers);
   if (participants.length) {
     const gain = CONFIG.profBattleSurvive + rep.kills * CONFIG.profPerKill / participants.length;
@@ -721,7 +764,7 @@ function resolveRaid(wave, gateOpen) {
   } else {
     pushLog('【骚扰】关门固守：城外被劫存量 ' + Math.round(rep.fieldRobbed) + (rep.fieldKilled ? '、平民遇害 ' + rep.fieldKilled : '') + (rep.beaconBurned ? '、烽燧被焚' : ''));
   }
-  if (rep.kills > 0) pushLog('城头反击歼敌 ' + rep.kills + '/' + wave.size + (rep.captives ? '，俘虏 ' + rep.captives : ''));
+  if (rep.kills > 0) pushLog('城头反击歼敌 ' + rep.kills + '/' + wave.size + (rep.captives ? '，俘虏 ' + rep.captives : '') + (rep.loot > 0 ? '，缴获钱 ' + rep.loot : ''));
 }
 
 // ============================ 总攻结算（改造⑦⑧：续体式 + 决策点×3） ============================
@@ -915,10 +958,12 @@ function finishSegBattle() {
     rep.captives = Math.ceil(wave.size * CONFIG.captiveRate);
     state.pendingCaptives += rep.captives;
   }
+  rep.loot = Math.round(rep.kills * CONFIG.assaultLootPerKill); // 战利品（v0.4.2 开启：与实时路径同口径）
+  if (rep.loot > 0) { LEDGER_SRC = '战利品'; addRes('money', rep.loot); LEDGER_SRC = null; }
   addRes('prestige', CONFIG.assaultWinPrestige); // 打退总攻
   state.battleReport = rep;
   state.paused = true;
-  pushLog('【大捷】总攻退去！歼敌 ' + rep.kills + '，我方殉国 ' + rep.dead + '（声望+' + CONFIG.assaultWinPrestige + '）');
+  pushLog('【大捷】总攻退去！歼敌 ' + rep.kills + '，我方殉国 ' + rep.dead + '，缴获钱 ' + rep.loot + '（声望+' + CONFIG.assaultWinPrestige + '）');
   // 胜利判定：守过总攻且声望达标
   if (!state.gameOver) {
     if (getRes('prestige') >= CONFIG.winPrestige) {
