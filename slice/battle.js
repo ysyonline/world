@@ -341,12 +341,29 @@ function spawnSiege() {
   const g0 = GATES.find(g => g.side === 'south') || GATES[0];                 // 前门（主攻方向）
   const g1 = GATES.find(g => g.side === 'north') || GATES[GATES.length - 1];  // 后门（器械方向）
   const outY = (g, d) => g.y + (g.side === 'north' ? -d : d);                 // 沿城外纵深方向取点
+  // ---- 2026-10-07 修法②（用户裁决）：总攻规模随守军+声望缩放（原写死 36 单位，与经济产出断层）----
+  // 模型（03 §3.4 声望双刃剑「塞上肥关，胡骑必至」在此接通）：
+  //   兵力项：我方战斗编队总人数 n × 攻守比锚 0.65——55 满编→36 敌，恰为原写死规模
+  //           （battle-smoke A 挂机必败/B 操作应胜的胜败基线即按 36:55 调定，锚不可乱动）
+  //   声望项：prestige 50 为基准 → 每高 10 点 +8%、每低 10 点 -8%，钳 [0.7, 1.5]
+  //   下限 12（保「四色编队」多路结构）；上限 46（原规模封顶）
+  const myN = S.teams.reduce((s, t) => s + t.n, 0);
+  // 经营层声望（battle.js 在 sim 之后加载，getRes 可用；防御式兜底 50）
+  const pre = (typeof getRes === 'function') ? getRes('prestige') : 50;
+  const presK = clamp(1 + (pre - 50) * 0.008, 0.7, 1.5);
+  const targetN = clamp(Math.round(myN * 0.65 * presK), 12, 46);
+  const scale = targetN / 36; // 36=原写死规模；scale=1 时编队与旧版逐一同
+  const mul = (arr) => { // 编队按 scale 伸缩：循环取整保谱系（缩小时先砍队尾先登，冲车/井阑永在）
+    const n = clamp(Math.round(arr.length * scale), 1, arr.length);
+    const out = []; for (let i = 0; i < n; i++) out.push(arr[i % arr.length]);
+    return out;
+  };
   // 白编队（前门·正攻）：冲车×2 + 铁骑×4 + 先登×8（10-05 调参：攻方 58→46）
-  spawnGroup('white', g0.x, outY(g0, 190), ['ram', 'ram', 'iron', 'iron', 'iron', 'iron',
-    'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard'], 55);
+  spawnGroup('white', g0.x, outY(g0, 190), mul(['ram', 'ram', 'iron', 'iron', 'iron', 'iron',
+    'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard']), 55);
   // 青编队（后门·器械）：井阑×2 + 弩骑×3 + 先登×6
-  spawnGroup('cyan', g1.x, outY(g1, 190), ['tower', 'tower', 'arbalest', 'arbalest', 'arbalest',
-    'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard'], 55);
+  spawnGroup('cyan', g1.x, outY(g1, 190), mul(['tower', 'tower', 'arbalest', 'arbalest', 'arbalest',
+    'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard', 'vanguard']), 55);
   // 乌编队（门侧墙·云梯佯攻）：先登×5
   // 08 §3：左右是深涧天险不可攻，所以「爬墙」只能落在与正门同向的门侧可攀段上——
   // 这正是「放门还是放墙」这个决策成立的前提：两点同侧、一个屏幕看得见。
@@ -354,14 +371,15 @@ function spawnSiege() {
   if (ci < 0) ci = CONFIG.map.segs.findIndex(s => s.climb);
   const cs = CONFIG.map.segs[ci];
   const cx = cs.x + cs.w / 2, cy = wallY(cs.side) + (cs.side === 'north' ? -150 : 150);
-  spawnGroup('black', cx, cy, Array(5).fill('vanguard'), 50);
+  spawnGroup('black', cx, cy, mul(Array(5).fill('vanguard')), 50);
   S.enemies.forEach(e => { if (e.squad === 'black') e.climbSeg = ci; });
   // 骍编队（机动游骑×6 城外游弋截杀）；前波伏兵铁骑并入
-  spawnGroup('red', MAP.cliffW + 70, cy, Array(6).fill('rider'), 70);
+  spawnGroup('red', MAP.cliffW + 70, cy, mul(Array(6).fill('rider')), 70);
   S.enemies.forEach(e => { if (e.state === 'ambush') { e.state = 'hunt'; e.squad = 'red'; } });
   SQUADS.forEach(sq => { if (!sq.total) sq.total = S.enemies.filter(e => e.squad === sq.key).length; });
   S.siegeCount = S.enemies.filter(e => !e.despawned).length; // 含前波已转化的伏兵/游骑
-  banner('【总攻】四色分进——白攻' + g0.label + ' · 青逼' + g1.label + ' · 乌爬' + cs.name + ' · 骍骑游弋');
+  banner('【总攻】四色分进——白攻' + g0.label + ' · 青逼' + g1.label + ' · 乌爬' + cs.name + ' · 骍骑游弋'
+    + '（守军' + myN + ' · 敌' + S.siegeCount + '：声望' + pre + ' → 胡骑' + (presK > 1.02 ? '更盛' : presK < 0.98 ? '稍敛' : '如常') + '）');
 }
 function nearestWallPointTo(e) {
   const C = RTS_CONFIG.city;

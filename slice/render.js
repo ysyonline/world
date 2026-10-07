@@ -143,18 +143,25 @@ function renderHUD() {
   ctx.font = '12px sans-serif';
   let warn = '耗粮' + state.grainNeed + '/日·饥荒线' + threshold + (state.famine ? '【饥荒中】' : '');
   const policyLabel = state.curfewPolicy === 'open' ? '夜不闭户' : (state.curfewPolicy === 'closed' ? '夜夜宵禁' : '每晚询问');
-  warn += '  宵禁：' + policyLabel + (state.innStay ? '（明日商税减半）' : '') + '  在押' + state.captives;
+  const taxLv = CONFIG.taxLevels[state.taxLevel];
+  const taxLeft = CONFIG.taxMonthDays - (state.day % CONFIG.taxMonthDays);
+  warn += '  宵禁：' + policyLabel + (state.innStay ? '（明日商税减半）' : '') + '  口钱' + taxLv.perHead + '钱/月·' + taxLeft + '日后结（声望' + (taxLv.prestige > 0 ? '+' : '') + taxLv.prestige + '）  在押' + state.captives;
   if (state.unpaidDays > 0) warn += '  【欠饷' + state.unpaidDays + '日】';
   if (over) warn += '  【住房不足：' + (getRes('pop') - cap) + '人流落街头】';
   if (getRes('prestige') < CONFIG.prestigeWarnLine) warn += '  【⚠声望濒危 ' + getRes('prestige') + '】';
-  ctx.fillStyle = state.famine || state.unpaidDays > 0 || over ? '#ff8a7a' : (getRes('grain') < threshold * 2 ? '#efb63c' : '#7a6f58');
+  ctx.fillStyle = state.famine || state.unpaidDays > 0 || over || taxLv.prestige <= -3 ? '#ff8a7a' : (getRes('grain') < threshold * 2 ? '#efb63c' : '#7a6f58');
   ctx.fillText(warn, 430, 36);
   // 任务角标
   if (state.task) {
     ctx.fillStyle = state.task.accepted ? '#c9a45c' : '#8a7c5e';
-    ctx.fillText(state.task.accepted ? '【任务】' + taskText(state.task) + '（' + Math.max(0, state.task.due - state.day) + '日内）' : '【圣旨到】待接', 430, 50);
+    ctx.fillText(state.task.accepted ? '【任务】' + taskText(state.task) + '（' + Math.max(0, state.task.due - state.day) + '日内·赏声望' + CONFIG.taskRewardPrestige + '政' + CONFIG.taskRewardPolitical + '）' : '【圣旨到】待接（赏声望' + CONFIG.taskRewardPrestige + '政' + CONFIG.taskRewardPolitical + '）', 430, 50);
   }
-  // 右上按钮：暂停 / 倍速 / 宵禁政策 / 账本（v0.3）
+  // 右上按钮：暂停 / 倍速 / 宵禁政策 / 税率 / 账本（v0.3 + v0.4.2 口钱）
+  drawButton(W - 486, 14, 108, 28, '税：' + CONFIG.taxLevels[state.taxLevel].label, state.taxLevel !== 1, function () {
+    state.taxLevel = (state.taxLevel + 1) % CONFIG.taxLevels.length;
+    const lv = CONFIG.taxLevels[state.taxLevel];
+    pushLog('【口钱】改征' + lv.label + '：民口' + lv.perHead + '钱/月 · ' + lv.note + '（次月结生效）');
+  });
   drawButton(W - 372, 14, 84, 28, '宵禁：' + (state.curfewPolicy === 'open' ? '常开' : (state.curfewPolicy === 'closed' ? '常闭' : '询问')), state.curfewPolicy !== 'ask', function () {
     state.curfewPolicy = state.curfewPolicy === 'ask' ? 'open' : (state.curfewPolicy === 'open' ? 'closed' : 'ask');
     const lab = { ask: '每晚询问（默认）', open: '常开：商队夜入 + 夜赌风险', closed: '常闭：商队宿驿站，明日税减半' };
@@ -186,16 +193,17 @@ function todayEstimate() { // 今日预估：口粮/军饷按当前人口兵额�
 }
 function renderLedger() {
   if (!state.ledgerView) return;
-  const pw = 560, px = 1010 - pw + 256, py = 320, ph = 250;
-  const x = 706;
+  // v0.4.1 修遮挡：账本原在右栏 (706,320,560×250)，打开即盖住运输线(y348)与建筑面板(y452)——
+  // v0.3.1「坊市没了」同类 bug。挪到地图视口左侧（经营期该处常年空置），宽 380 只占视口 38%。
+  const pw = 380, x = 12, py = 190, ph = 250;
   panel(x, py, pw, ph, '账 本 田 鸡（昨日实结 · 今日流水 · 今日预估）');
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   let y = py + 40;
-  // 表头
+  // 表头（v0.4.1 面板收窄到 380：列位同步收紧）
   ctx.fillStyle = '#8a7c5e';
-  ctx.fillText('资源    昨日净额      今日已入/出（来源：数额）              今日预估', x + 12, y);
+  ctx.fillText('资源   昨日净额   今日已入/出（来源：数额）      预估', x + 12, y);
   y += 18;
   const est = todayEstimate();
   const yd = state.ledger.yday;
@@ -207,11 +215,11 @@ function renderLedger() {
     ctx.fillStyle = '#c9bd9e';
     ctx.fillText(RES_LABEL[k], x + 12, y);
     ctx.fillStyle = net > 0 ? '#a8c98a' : (net < 0 ? '#ff8a7a' : '#8a7c5e');
-    ctx.fillText((net > 0 ? '+' : '') + Math.round(net * 10) / 10, x + 60, y);
+    ctx.fillText((net > 0 ? '+' : '') + Math.round(net * 10) / 10, x + 68, y);
     ctx.fillStyle = '#a89f88';
-    ctx.fillText(fStr.length > 44 ? fStr.slice(0, 44) + '…' : fStr, x + 130, y);
+    ctx.fillText(fStr.length > 20 ? fStr.slice(0, 20) + '…' : fStr, x + 118, y);
     ctx.fillStyle = e >= 0 ? '#a8c98a' : '#efb63c';
-    ctx.fillText((e > 0 ? '+' : '') + e, x + 470, y);
+    ctx.fillText((e > 0 ? '+' : '') + e, x + 320, y);
     y += 20;
   });
   // 诊断
@@ -294,18 +302,9 @@ function renderScene() {
       ctx.fillStyle = gh <= 3 ? '#d95745' : (gh < gm ? '#efb63c' : '#8fae66');
       ctx.fillRect(r.x + 1, r.y + r.h - 5, (r.w - 2) * (gh / gm), 3);
     }
-    // walker（背货 / 收保撤离）：半径按 zoom 反算，保证屏幕尺寸恒定
-    const wr = 4 / camera.zoom;
-    state.walkers.forEach(function (w) {
-      ctx.fillStyle = w.color;
-      ctx.beginPath(); ctx.arc(w.x, w.y, wr, 0, Math.PI * 2); ctx.fill();
-      if (w.kind === 'carry') {
-        const k0 = Object.keys(w.cargo)[0];
-        const resColor = { grain: '#d8b83c', wood: '#8a6a3a', soil: '#a5785a', iron: '#8a9ab0' };
-        ctx.fillStyle = resColor[k0] || '#d8b83c';
-        ctx.fillRect(w.x - wr, w.y - wr * 2.6, wr * 2, wr * 1.3);
-      }
-    });
+    // v0.4.1：walker 绘制移出 renderScene → 独立 renderWalkers()（见 render() 序列）。
+    // 原先画在格子层 renderGridZone 之前，不透明格子底色把人整个盖住——城内格子密、
+    // 背货路程长，表现为「农民进城后小绿点消失」。渲染顺序=图层顺序：人必须画在地面之上。
   });
   // ---- 文字层（屏幕坐标，字号恒定）----
   const ccx = C.x + C.w / 2;
@@ -403,6 +402,23 @@ function renderGridZone(zone) {
     }
   }
 }
+// v0.4.1：walker 层（背货/收保/复工/商人）——画在格子层之后，人站在地面上。
+// 半径按 zoom 反算保证屏幕尺寸恒定；背货walker头顶加物资色小包裹。
+function renderWalkers() {
+  drawWorld(function () {
+    const wr = 4 / camera.zoom;
+    state.walkers.forEach(function (w) {
+      ctx.fillStyle = w.color;
+      ctx.beginPath(); ctx.arc(w.x, w.y, wr, 0, Math.PI * 2); ctx.fill();
+      if (w.kind === 'carry') {
+        const k0 = Object.keys(w.cargo)[0];
+        const resColor = { grain: '#d8b83c', wood: '#8a6a3a', soil: '#a5785a', iron: '#8a9ab0' };
+        ctx.fillStyle = resColor[k0] || '#d8b83c';
+        ctx.fillRect(w.x - wr, w.y - wr * 2.6, wr * 2, wr * 1.3);
+      }
+    });
+  });
+}
 
 // ============================ 建造面板（右栏 · 08 §6 第 2 步：地图铺满视口，面板不再压地图） ============================
 function renderPalette() {
@@ -445,8 +461,10 @@ function renderPalette() {
   }
 }
 // 运输线列表（v0.3：一条线=一个产地→对应仓库；脚夫废除）
+// v0.4.1 修遮挡：①y 348→366（原与建造菜单底行提示文字重叠）②选中建筑/墙段时让位给建筑面板（右栏纵向不够两块同屏）
 function renderTransport() {
-  const px = 1010, py = 348, pw = 256, ph = 96; // 右栏中部：建造菜单之下、信息面板（y452）之上
+  if (state.selected || state.selectedSeg) return; // 建筑面板优先占用右栏（取消选中即恢复）
+  const px = 1010, py = 366, pw = 256, ph = 96; // 右栏中部：建造菜单之下、日志区（y640）之上
   panel(px, py, pw, ph, '运 输 线');
   ctx.font = '11px sans-serif';
   ctx.textAlign = 'left';
@@ -480,8 +498,11 @@ function renderTransport() {
 }
 
 // ============================ 建筑面板（右栏） ============================
+// v0.4.1 修遮挡：原 py=452 + 内容高 ≈230 → 底行按钮落在 y656~680，被日志区（y640 起）盖住——
+// 用户实机「没有按钮派遣平民种田」的直接原因（与 v0.3.1「坊市没了」同类：canvas 无层级，后画盖先画）。
+// 修法：选中时运输线让位，面板上移到 py=366，底行按钮收进 y≤630（日志线 y640 之上）。
 function renderBuildingPanel() {
-  const px = 1010, py = 452, pw = 256, ph = 240;
+  const px = 1010, py = 366, pw = 256, ph = 264;
   if (!state.selected) {
     panel(px, py, pw, 110, '城 市 概 览');
     ctx.font = '12px sans-serif';
@@ -608,9 +629,10 @@ function renderBuildingPanel() {
 }
 
 // ============================ 布防面板（右栏下） ============================
+// v0.4.1 修遮挡：原 py=452 + 264 → 底到 y716，被日志区（y640）盖住下半（撤器械/修门不可见）。上移到 366 对齐建筑面板。
 function renderSegPanel() {
   if (state.selectedSeg === null) return;
-  const px = 1010, py = 452, pw = 256, ph = 264;
+  const px = 1010, py = 366, pw = 256, ph = 264;
   const s = state.selectedSeg;
   const name = CONFIG.wall.segNames[s];
   const seg = troopsInSeg(s);
@@ -664,6 +686,9 @@ function renderSegPanel() {
 
 // ============================ 日志 / 弹窗 ============================
 function renderLog() {
+  // v0.4.1：右栏底色改在 render() 开头铺（见 render 内注释）——原先铺在这里（renderLog 在
+  // 面板之后执行）会把建造菜单/建筑面板整个盖掉，「建筑面板没了没法建」即此。教训第三条：
+  // 底色永远先画，内容后画；渲染顺序=图层顺序。
   const y0 = H - CONFIG.view.logH;
   ctx.fillStyle = '#1a1510';
   ctx.fillRect(0, y0, W, CONFIG.view.logH);
@@ -787,7 +812,7 @@ function renderDecision() {
   } else if (d.kind === 'emperor') {
     title = '【圣旨到】朝廷摊派';
     lines = [taskText(state.task) + '，限 ' + CONFIG.taskDueDays + ' 日缴清',
-      '完成：钱+' + CONFIG.taskRewardMoney + ' · 政治点+' + CONFIG.taskRewardPolitical,
+      '完成：声望+' + CONFIG.taskRewardPrestige + ' · 政治点+' + CONFIG.taskRewardPolitical + '（声望高=流民来投快，但下次总攻也更大）',
       '误期：声望-' + CONFIG.taskFailPrestige + '（不接无罚）'];
     yes = '接旨'; no = '辞旨（不接）';
   } else if (d.kind === 'oil') {
@@ -1091,8 +1116,13 @@ function render() {
     renderPauseOverlay();
     return;
   }
+  // v0.4.1：右栏底色在最开头铺（先底色后内容——铺在 renderLog 里会盖掉建造菜单/面板）。
+  // 同时解决"面板缩短后右栏下半露画布背景被像素抽检算空白"的问题（原 89.8%<90% 误报）。
+  ctx.fillStyle = '#14100c';
+  ctx.fillRect(1010, 56, 270, 640 - 56);
   renderGridZone('out');
   renderGridZone('in');
+  renderWalkers(); // v0.4.1：人画在格子之上（原先在 renderScene 里，被格子底色盖住）
   renderPalette();
   renderTransport();
   renderBuildingPanel();

@@ -325,6 +325,20 @@ dailySettlers.push(function commerce(day) {
   state.innStay = false;
   if (tax > 0) { LEDGER_SRC = '商税'; addRes('money', tax); LEDGER_SRC = null; pushLog('商税入库 钱+' + tax); }
 });
+// 月度人头税·口钱（v0.4.2，2026-10-07 用户裁决；01 §3.4.3）：每 30 日按人口征一次。
+// 税基 = 平民全员（含闲民/商人）——汉制算赋人人缴；士兵纳粮不纳税（戍卒廪食，军饷另发）。
+// 滑杆制衡：税钱与声望反向（CONFIG.taxLevels），重赋月月掉声望 → 跌破流民线 45 → 税基萎缩。
+dailySettlers.push(function pollTax(day) {
+  if (day % CONFIG.taxMonthDays !== 0) return;
+  const lv = CONFIG.taxLevels[state.taxLevel];
+  const heads = getRes('pop'); // 平民税基（士兵不在 pop 内——soldiers 独立计）
+  const levy = heads * lv.perHead;
+  if (levy > 0) { LEDGER_SRC = '口钱·' + lv.label; addRes('money', levy); LEDGER_SRC = null; }
+  if (lv.prestige !== 0) addRes('prestige', lv.prestige);
+  pushLog('【口钱】月结：民' + heads + ' × ' + lv.label + lv.perHead + '钱'
+    + (levy > 0 ? ' = 钱+' + levy : '（免赋）')
+    + (lv.prestige > 0 ? ' · 声望+' + lv.prestige : (lv.prestige < 0 ? ' · 声望' + lv.prestige : '')));
+});
 // 宵禁（日结末位）：三态政策生效（v0.3）
 //   open=常开：商队自动入城 + 夜赌事件；closed=常闭：商队夜宿驿站（次日税减半）；ask=每晚询问（默认）
 dailySettlers.push(function curfew(day) {
@@ -994,10 +1008,10 @@ dailySettlers.push(function emperor(day) {
     if (getRes(t.kind) >= t.amount) {
       LEDGER_SRC = '皇帝任务';
       addRes(t.kind, -t.amount);
-      addRes('money', CONFIG.taskRewardMoney);
+      addRes('prestige', CONFIG.taskRewardPrestige);
       LEDGER_SRC = null;
       addRes('political', CONFIG.taskRewardPolitical);
-      pushLog('【缴旨】' + taskText(t) + ' 如数上缴 → 钱+' + CONFIG.taskRewardMoney + ' 政+' + CONFIG.taskRewardPolitical);
+      pushLog('【缴旨】' + taskText(t) + ' 如数上缴 → 声望+' + CONFIG.taskRewardPrestige + ' 政+' + CONFIG.taskRewardPolitical + '（塞上肥关：声望高，下次总攻亦大）');
     } else {
       addRes('prestige', -CONFIG.taskFailPrestige);
       pushLog('【误期】' + taskText(t) + ' 未能缴清，声望-' + CONFIG.taskFailPrestige + '（失败惩罚占位，细则挂账）');

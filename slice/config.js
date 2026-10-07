@@ -128,6 +128,19 @@ const CONFIG = {
   walkSpeed: 30,
   // 商人与宵禁（01 §7 v0.4，占位）
   marketTax: 10,          // 市坊商税 10 钱/日直入库（坊5/肆12 占位上调，试玩后定）
+  // ---- 月度人头税·口钱（v0.4.2，2026-10-07 用户裁决实装；01 §3.4.3）----
+  // 每 30 游戏日按人口征一次（税基=平民全员含闲民/商人；士兵纳粮不纳税=汉制戍卒廪食）。
+  // 滑杆五档：钱×声望反向对冲（Stronghold 制衡环 + 汉制算赋120钱/年·口赋23钱/年按月敛）。
+  // 锚：30人×轻赋1钱=30钱/月，平赋=60——接住任务异构化砍掉的钱口（原-35钱/7日），形态从脉冲改基线。
+  // 制衡：重赋-3声望/月 → 2个月跌破流民线45 → 税基萎缩（收税自杀）；免赋+1声望=花钱买人口增速。
+  taxMonthDays: 30,
+  taxLevels: [
+    { key: 'none',   label: '免赋', perHead: 0, prestige: +1, note: '休养生息（声望+1/月）' },
+    { key: 'light',  label: '轻赋', perHead: 1, prestige: 0,  note: '常态（默认）' },
+    { key: 'fair',   label: '平赋', perHead: 2, prestige: -1, note: '民有微词' },
+    { key: 'heavy',  label: '重赋', perHead: 3, prestige: -3, note: '民怨渐起' },
+    { key: 'harsh',  label: '苛赋', perHead: 4, prestige: -6, note: '亡者相随' },
+  ],
   innTaxFactor: 0.5,      // 驿站过夜：次日商税 ×0.5（误早市）
   nightTheftP: 0.15,      // 夜赌·偷盗概率（放行才触发）
   nightTheftMoney: 0.10,  // 偷盗：钱 -10%
@@ -139,7 +152,9 @@ const CONFIG = {
   // 皇帝任务（07 最简版，占位）
   taskFirstDay: 6, taskEvery: 7, taskDueDays: 3,
   taskAmounts: { grain: 30, money: 25 },
-  taskRewardMoney: 60, taskRewardPolitical: 5, taskFailPrestige: 5,
+  // 皇帝任务奖励（2026-10-07 用户裁决·异构化）：交 A 类型换 B 类型——同类型奖励（交钱换更多钱）不构成决策，"想都不用想做"。
+  // 缴军粮/税钱 → 声望+3（流民阈值活收益）+ 政治点+5（EA 消费口）；钱奖励删除。经济总水源 -35钱/7日 由断层修法②（总攻随守军缩放）对冲。
+  taskRewardPrestige: 3, taskRewardPolitical: 5, taskFailPrestige: 5,
   // 流民来投（03 §3，沿用阈值驱动）
   refugeePrestige1: 45, refugeePrestige2: 70, // 且需粮存≥9天口粮（无粮不来投——自平衡闸门）
   // 胜负硬条件（03 §3.3、02 §4）

@@ -53,8 +53,10 @@ for (let d = state.day; d <= 45 && !state.gameOver; d++) {
     while (state.inv.crossbow > 0 && state.segXbow[s] < 1) deployGear(s, 'crossbow');
     if (state.gateHp[s] < CONFIG.gateMaxHp) repairGate(s);
   });
-  // 圣旨接不接看家底（不接无罚；留军饷+口粮缓冲，防欠饷逃兵螺旋）
-  AUTO.emperor = getRes('money') >= 25 + 30 && getRes('grain') >= 30 + Math.ceil(state.grainNeed * 2);
+  // 圣旨接不接看家底（v0.4.2 任务异构化：奖励=声望+政，不再是钱——判定改为「交出物缴清后仍有安全余量」）
+  AUTO.emperor = (state.task && state.task.kind === 'money'
+    ? getRes('money') >= CONFIG.taskAmounts.money + 40   // 缴税后留 40 保兵营/民房节奏
+    : getRes('grain') >= CONFIG.taskAmounts.grain + Math.ceil(state.grainNeed * 3)); // 缴粮后留 3 日口粮
   // 关键地块每日补建（夜赌失火/被毁即重建）
   B('farm', 'out', 0, 0); B('farm', 'out', 0, 1); B('lumber', 'out', 1, 0);
   if (state.day >= 14) B('farm', 'out', 1, 1);
